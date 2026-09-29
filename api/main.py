@@ -1,9 +1,18 @@
-
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase_client import supabase
 
 app = FastAPI()
+
+# Permite que Shopify se comunique con nuestra API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class Medicion(BaseModel):
@@ -48,7 +57,10 @@ def recibir_medicion(medicion: Medicion):
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 
 @app.post("/parcelas")
@@ -74,7 +86,10 @@ def crear_parcela(parcela: Parcela):
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 
 @app.get("/productores/{productor_id}")
