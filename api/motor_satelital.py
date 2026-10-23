@@ -7,22 +7,19 @@ load_dotenv()
 
 OPENEO_URL = "https://openeo.dataspace.copernicus.eu"
 
-
 def conectar_copernicus():
-    conexion = openeo.connect(OPENEO_URL)
-
     token = os.getenv("OPENEO_REFRESH_TOKEN")
 
-    if token:
-        # Autenticación para servidores
-        conexion.authenticate_oidc_refresh_token(
-            provider_id="CDSE",
-            refresh_token=token,
-            store_refresh_token=False
-        )
-    else:
-        # Autenticación local con sesión guardada
-        conexion.authenticate_oidc()
+    if not token:
+        raise RuntimeError("Falta configurar OPENEO_REFRESH_TOKEN")
+
+    conexion = openeo.connect(OPENEO_URL)
+
+    conexion.authenticate_oidc_refresh_token(
+        provider_id="CDSE",
+        refresh_token=token,
+        store_refresh_token=False
+    )
 
     return conexion
 
@@ -82,3 +79,20 @@ def obtener_zona(perimetro):
         "east": max(longitudes),
         "north": max(latitudes)
     }
+def exportar_ndvi(zona, fecha_inicio, fecha_fin, destino):
+    indices = calcular_indices(zona, fecha_inicio, fecha_fin)
+
+    ndvi = indices["ndvi"]
+
+    ndvi.save_result(format="GTiff").download(destino)
+
+    return destino
+
+def exportar_ndmi(zona, fecha_inicio, fecha_fin, destino):
+    indices = calcular_indices(zona, fecha_inicio, fecha_fin)
+
+    ndmi = indices["ndmi"]
+
+    ndmi.save_result(format="GTiff").download(destino)
+
+    return destino
