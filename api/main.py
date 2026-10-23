@@ -1,11 +1,25 @@
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 from supabase_client import supabase
+from satelite import router as satelite_router
 
-app = FastAPI()
 
-# Permite que Shopify se comunique con nuestra API
+# INICIALIZACIÓN
+
+app = FastAPI(
+    title="DELTA Farming Technologies API",
+    version="1.0.0"
+)
+
+# Módulo satelital
+app.include_router(satelite_router.router if hasattr(satelite_router, "router") else satelite_router)
+
+
+# CORS - Comunicación con Shopify
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,6 +28,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# MODELOS
 
 class Medicion(BaseModel):
     sensor_id: str
@@ -29,12 +45,17 @@ class Parcela(BaseModel):
     productor_id: str
 
 
+# ESTADO GENERAL
+
 @app.get("/")
 def inicio():
     return {
-        "mensaje": "API de Agricultura de Precisión funcionando"
+        "mensaje": "DELTA Farming Technologies API funcionando",
+        "estado": "activo"
     }
 
+
+# MEDICIONES
 
 @app.post("/mediciones")
 def recibir_medicion(medicion: Medicion):
@@ -62,6 +83,8 @@ def recibir_medicion(medicion: Medicion):
             detail=str(e)
         )
 
+
+# PARCELAS
 
 @app.post("/parcelas")
 def crear_parcela(parcela: Parcela):
@@ -92,56 +115,79 @@ def crear_parcela(parcela: Parcela):
         )
 
 
+# PRODUCTORES
+
 @app.get("/productores/{productor_id}")
 def obtener_productor(productor_id: str):
-    productor = (
-        supabase.table("productores")
-        .select("*")
-        .eq("id", productor_id)
-        .execute()
-    )
+    try:
+        productor = (
+            supabase.table("productores")
+            .select("*")
+            .eq("id", productor_id)
+            .execute()
+        )
 
-    sensores = (
-        supabase.table("sensores")
-        .select("*")
-        .eq("productor_id", productor_id)
-        .execute()
-    )
+        sensores = (
+            supabase.table("sensores")
+            .select("*")
+            .eq("productor_id", productor_id)
+            .execute()
+        )
 
-    return {
-        "productor": productor.data,
-        "sensores": sensores.data
-    }
+        return {
+            "productor": productor.data,
+            "sensores": sensores.data
+        }
 
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# MEDICIONES POR SENSOR
 
 @app.get("/sensores/{sensor_id}/mediciones")
 def obtener_mediciones(sensor_id: str):
-    sensor = (
-        supabase.table("sensores")
-        .select("*")
-        .eq("id", sensor_id)
-        .execute()
-    )
-
-    if not sensor.data:
-        raise HTTPException(
-            status_code=404,
-            detail="Sensor no encontrado"
+    try:
+        sensor = (
+            supabase.table("sensores")
+            .select("*")
+            .eq("id", sensor_id)
+            .execute()
         )
 
-    mediciones = (
-        supabase.table("mediciones")
-        .select("*")
-        .eq("sensor_id", sensor_id)
-        .order("creado_en", desc=True)
-        .execute()
-    )
+        if not sensor.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Sensor no encontrado"
+            )
 
-    return {
-        "sensor": sensor.data,
-        "mediciones": mediciones.data
-    }
+        mediciones = (
+            supabase.table("mediciones")
+            .select("*")
+            .eq("sensor_id", sensor_id)
+            .order("creado_en", desc=True)
+            .execute()
+        )
 
+        return {
+            "sensor": sensor.data,
+            "mediciones": mediciones.data
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# SERVIDOR LOCAL
 
 if __name__ == "__main__":
     import uvicorn
