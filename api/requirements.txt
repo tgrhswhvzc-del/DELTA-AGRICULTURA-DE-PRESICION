@@ -3,3 +3,5 @@ uvicorn
 python-dotenv
 supabase
 requests
+openeo==0.53.0
+
