@@ -1,3 +1,4 @@
+
 import os
 import openeo
 from dotenv import load_dotenv
@@ -24,39 +25,75 @@ def conectar_copernicus():
     return conexion
 
 
+def obtener_proyeccion_utm(zona):
+    longitud = (zona["west"] + zona["east"]) / 2
+    latitud = (zona["south"] + zona["north"]) / 2
+
+    numero_zona = int((longitud + 180) / 6) + 1
+    numero_zona = max(1, min(60, numero_zona))
+
+    if latitud >= 0:
+        return 32600 + numero_zona
+    else:
+        return 32700 + numero_zona
+
+
 def calcular_indices(zona, fecha_inicio, fecha_fin):
     conexion = conectar_copernicus()
 
+    proyeccion = obtener_proyeccion_utm(zona)
+
+    # Bandas espectrales
     cubo = conexion.load_collection(
         "SENTINEL2_L2A",
         spatial_extent=zona,
         temporal_extent=[fecha_inicio, fecha_fin],
-        bands=["B04", "B08", "B11", "SCL"],
+        bands=["B04", "B08", "B11"],
         max_cloud_cover=20
     )
 
-    # Bandas base
-    rojo = cubo.band("B04")   # 10 m
-    nir = cubo.band("B08")    # 10 m
-    swir = cubo.band("B11")   # 20 m
-    scl = cubo.band("SCL")    # 20 m
+    # Remuestreo a una malla de 10 metros
+    cubo = cubo.resample_spatial(
+        resolution=10,
+        projection=proyeccion,
+        method="bilinear"
+    )
 
-    # Reescalar B11 y SCL a la malla de 10 m de B08
-    swir_10m = swir.resample_cube_spatial(nir, method="bilinear")
-    scl_10m = scl.resample_cube_spatial(nir, method="near")
+    # Clasificación de escena (SCL)
+    cubo_scl = conexion.load_collection(
+        "SENTINEL2_L2A",
+        spatial_extent=zona,
+        temporal_extent=[fecha_inicio, fecha_fin],
+        bands=["SCL"],
+        max_cloud_cover=20
+    )
 
-    # Máscara válida: vegetación y suelo descubierto
-    mascara_valida = (scl_10m == 4) | (scl_10m == 5)
+    # Alinear SCL sin interpolar sus categorías
+    cubo_scl = cubo_scl.resample_cube_spatial(
+        cubo,
+        method="near"
+    )
 
-    # Índices
+    # Extraer bandas después del remuestreo
+    rojo = cubo.band("B04")
+    nir = cubo.band("B08")
+    swir = cubo.band("B11")
+    scl = cubo_scl.band("SCL")
+
+    # Vegetación y suelo descubierto
+    mascara_valida = (scl == 4) | (scl == 5)
+
+    # Índice de vegetación
     ndvi = (nir - rojo) / (nir + rojo)
-    ndmi = (nir - swir_10m) / (nir + swir_10m)
 
-    # Aplicar máscara
+    # Índice de contenido de agua en vegetación
+    ndmi = (nir - swir) / (nir + swir)
+
+    # Excluir píxeles no válidos
     ndvi = ndvi.mask(~mascara_valida)
     ndmi = ndmi.mask(~mascara_valida)
 
-    # Reducir en el tiempo
+    # Mediana temporal
     ndvi = ndvi.reduce_dimension(
         dimension="t",
         reducer="median"
@@ -91,14 +128,32 @@ def obtener_zona(perimetro):
 
 
 def exportar_ndvi(zona, fecha_inicio, fecha_fin, destino):
-    indices = calcular_indices(zona, fecha_inicio, fecha_fin)
+    indices = calcular_indices(
+        zona,
+        fecha_inicio,
+        fecha_fin
+    )
+
     ndvi = indices["ndvi"]
-    ndvi.save_result(format="GTiff").download(destino)
+
+    ndvi.save_result(
+        format="GTiff"
+    ).download(destino)
+
     return destino
 
 
 def exportar_ndmi(zona, fecha_inicio, fecha_fin, destino):
-    indices = calcular_indices(zona, fecha_inicio, fecha_fin)
+    indices = calcular_indices(
+        zona,
+        fecha_inicio,
+        fecha_fin
+    )
+
     ndmi = indices["ndmi"]
-    ndmi.save_result(format="GTiff").download(destino)
+
+    ndmi.save_result(
+        format="GTiff"
+    ).download(destino)
+
     return destino
