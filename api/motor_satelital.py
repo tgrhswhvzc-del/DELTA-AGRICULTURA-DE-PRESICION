@@ -1,4 +1,3 @@
-
 import os
 import openeo
 from dotenv import load_dotenv
@@ -6,6 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENEO_URL = "https://openeo.dataspace.copernicus.eu"
+
 
 def conectar_copernicus():
     token = os.getenv("OPENEO_REFRESH_TOKEN")
@@ -35,19 +35,28 @@ def calcular_indices(zona, fecha_inicio, fecha_fin):
         max_cloud_cover=20
     )
 
-    rojo = cubo.band("B04")
-    nir = cubo.band("B08")
-    swir = cubo.band("B11")
-    scl = cubo.band("SCL")
+    # Bandas base
+    rojo = cubo.band("B04")   # 10 m
+    nir = cubo.band("B08")    # 10 m
+    swir = cubo.band("B11")   # 20 m
+    scl = cubo.band("SCL")    # 20 m
 
-    mascara_valida = (scl == 4) | (scl == 5)
+    # Reescalar B11 y SCL a la malla de 10 m de B08
+    swir_10m = swir.resample_cube_spatial(nir, method="bilinear")
+    scl_10m = scl.resample_cube_spatial(nir, method="near")
 
+    # Máscara válida: vegetación y suelo descubierto
+    mascara_valida = (scl_10m == 4) | (scl_10m == 5)
+
+    # Índices
     ndvi = (nir - rojo) / (nir + rojo)
-    ndmi = (nir - swir) / (nir + swir)
+    ndmi = (nir - swir_10m) / (nir + swir_10m)
 
+    # Aplicar máscara
     ndvi = ndvi.mask(~mascara_valida)
     ndmi = ndmi.mask(~mascara_valida)
 
+    # Reducir en el tiempo
     ndvi = ndvi.reduce_dimension(
         dimension="t",
         reducer="median"
@@ -79,20 +88,17 @@ def obtener_zona(perimetro):
         "east": max(longitudes),
         "north": max(latitudes)
     }
+
+
 def exportar_ndvi(zona, fecha_inicio, fecha_fin, destino):
     indices = calcular_indices(zona, fecha_inicio, fecha_fin)
-
     ndvi = indices["ndvi"]
-
     ndvi.save_result(format="GTiff").download(destino)
-
     return destino
+
 
 def exportar_ndmi(zona, fecha_inicio, fecha_fin, destino):
     indices = calcular_indices(zona, fecha_inicio, fecha_fin)
-
     ndmi = indices["ndmi"]
-
     ndmi.save_result(format="GTiff").download(destino)
-
     return destino
