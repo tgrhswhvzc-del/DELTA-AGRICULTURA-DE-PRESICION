@@ -138,3 +138,62 @@ def generar_ndmi(
             status_code=500,
             detail="No se pudo generar y guardar el mapa NDMI"
         )
+@router.get("/parcela/{parcela_id}/ndmi/url")
+def obtener_url_ndmi(parcela_id: str):
+    try:
+        respuesta = (
+            supabase.table("parcelas")
+            .select("id")
+            .eq("id", parcela_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not respuesta.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Parcela no encontrada"
+            )
+
+        archivos = supabase.storage.from_("mapas-satelitales").list(
+            f"parcelas/{parcela_id}/ndmi"
+        )
+
+        if not archivos:
+            raise HTTPException(
+                status_code=404,
+                detail="No hay mapas NDMI para esta parcela"
+            )
+
+        archivo = sorted(
+            [a["name"] for a in archivos if a["name"].endswith(".tif")],
+            reverse=True
+        )
+
+        if not archivo:
+            raise HTTPException(
+                status_code=404,
+                detail="No se encontraron mapas NDMI"
+            )
+
+        ruta = f"parcelas/{parcela_id}/ndmi/{archivo[0]}"
+
+        resultado = supabase.storage.from_("mapas-satelitales").create_signed_url(
+            ruta, 3600
+        )
+
+        return {
+            "parcela_id": parcela_id,
+            "archivo": archivo[0],
+            "url": resultado.get("signedURL") or resultado.get("signedUrl"),
+            "expira_en_segundos": 3600
+        }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("ERROR URL NDMI:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar la URL del mapa NDMI"
+        )
