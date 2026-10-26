@@ -1,8 +1,11 @@
 
 import os
+import json
+import requests
 import secrets
 import tempfile
-from datetime import date, timedelta
+
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Header, Query, Depends
@@ -21,11 +24,84 @@ from seguridad_satelital import verificar_propietario
 
 router = APIRouter(prefix="/satelite", tags=["Satelite"])
 BUCKET = "mapas-satelitales"
+STAC_URL = "https://stac.dataspace.copernicus.eu/v1/search"
+
+
+def consultar_escenas_referencia(zona, fecha_inicio, fecha_fin):
+    """Consulta escenas candidatas, sin atribuirlas directamente al NDMI."""
+
+    consulta = {
+        "collections": ["sentinel-2-l2a"],
+        "bbox": [
+            zona["west"],
+            zona["south"],
+            zona["east"],
+            zona["north"],
+        ],
+        "datetime": (
+            f"{fecha_inicio}T00:00:00Z/"
+            f"{fecha_fin}T23:59:59Z"
+        ),
+        "limit": 100,
+    }
+
+    try:
+        respuesta = requests.post(
+            STAC_URL,
+            json=consulta,
+            timeout=20,
+        )
+        respuesta.raise_for_status()
+
+        escenas = respuesta.json().get("features", [])
+
+        fechas = sorted({
+            imagen.get("properties", {}).get("datetime", "")[:10]
+            for imagen in escenas
+            if imagen.get("properties", {}).get("datetime")
+            and imagen.get("properties", {}).get("eo:cloud_cover") is not None
+            and imagen["properties"]["eo:cloud_cover"] <= 20
+        })
+
+        return fechas, len(escenas) >= 100
+
+    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+        print("ADVERTENCIA STAC NDMI:", repr(error))
+        return [], False
+
+
+def guardar_metadata_ndmi(ruta, metadata):
+    contenido = json.dumps(
+        metadata,
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    supabase.storage.from_(BUCKET).upload(
+        ruta,
+        contenido,
+        {
+            "content-type": "application/json",
+            "upsert": "true",
+        },
+    )
+
+
+def leer_metadata_ndmi(ruta):
+    try:
+        contenido = supabase.storage.from_(BUCKET).download(ruta)
+        return json.loads(contenido.decode("utf-8"))
+
+    except Exception as error:
+        print("ADVERTENCIA METADATA NDMI:", repr(error))
+        return None
 
 
 @router.get("/estado")
 def estado_satelite():
-    return {"servicio": "DELTA Satellite", "estado": "funcionando"}
+    return {
+        "servicio": "DELTA Satellite",
+        "estado": "funcionando",
+    }
 
 
 @router.get("/parcela/{parcela_id}/zona")
@@ -45,7 +121,7 @@ def consultar_zona_parcela(
         if not respuesta.data:
             raise HTTPException(
                 status_code=404,
-                detail="Parcela no encontrada"
+                detail="Parcela no encontrada",
             )
 
         parcela = respuesta.data[0]
@@ -53,7 +129,7 @@ def consultar_zona_parcela(
         if not parcela.get("perimetro"):
             raise HTTPException(
                 status_code=404,
-                detail="La parcela no tiene perímetro"
+                detail="La parcela no tiene perímetro",
             )
 
         return {
@@ -64,42 +140,46 @@ def consultar_zona_parcela(
 
     except HTTPException:
         raise
+
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail="Perímetro de parcela inválido"
+            detail="Perímetro de parcela inválido",
         )
+
     except Exception as error:
         print("ERROR SATELITAL:", repr(error))
         raise HTTPException(
             status_code=500,
-            detail="Error al consultar la parcela"
+            detail="Error al consultar la parcela",
         )
 
 
 @router.get("/diagnostico-copernicus", include_in_schema=False)
 def diagnostico_copernicus(
-    x_delta_diagnostic_key: str = Header(default="")
+    x_delta_diagnostic_key: str = Header(default=""),
 ):
     clave = os.getenv("DELTA_DIAGNOSTIC_KEY")
 
     if not clave or not secrets.compare_digest(
-        x_delta_diagnostic_key, clave
+        x_delta_diagnostic_key,
+        clave,
     ):
         raise HTTPException(
             status_code=404,
-            detail="No encontrado"
+            detail="No encontrado",
         )
 
     try:
         conectar_copernicus()
+
         return {"copernicus": "conectado"}
 
     except Exception as error:
         print("ERROR COPERNICUS:", repr(error))
         raise HTTPException(
             status_code=503,
-            detail="No se pudo conectar con Copernicus"
+            detail="No se pudo conectar con Copernicus",
         )
 
 
@@ -115,7 +195,7 @@ def generar_ndmi(
     if fecha_inicio > fecha_fin:
         raise HTTPException(
             status_code=400,
-            detail="Rango de fechas inválido"
+            detail="Rango de fechas inválido",
         )
 
     try:
@@ -130,7 +210,7 @@ def generar_ndmi(
         if not respuesta.data:
             raise HTTPException(
                 status_code=404,
-                detail="Parcela no encontrada"
+                detail="Parcela no encontrada",
             )
 
         parcela = respuesta.data[0]
@@ -138,18 +218,21 @@ def generar_ndmi(
         if not parcela.get("perimetro"):
             raise HTTPException(
                 status_code=400,
-                detail="La parcela no tiene perímetro"
+                detail="La parcela no tiene perímetro",
             )
 
         zona = obtener_zona(parcela["perimetro"])
+
         fechas = (
             f"{fecha_inicio.isoformat()}_"
             f"{fecha_fin.isoformat()}"
         )
 
         carpeta = f"parcelas/{parcela_id}/ndmi"
+
         ruta_tif = f"{carpeta}/{fechas}.tif"
         ruta_png = f"{carpeta}/{fechas}.png"
+        ruta_metadata = f"{carpeta}/{fechas}.json"
 
         with tempfile.TemporaryDirectory() as temporal:
             archivo_tif = str(Path(temporal) / "ndmi.tif")
@@ -159,10 +242,13 @@ def generar_ndmi(
                 zona,
                 fecha_inicio.isoformat(),
                 fecha_fin.isoformat(),
-                archivo_tif
+                archivo_tif,
             )
 
-            crear_png_ndmi(archivo_tif, archivo_png)
+            crear_png_ndmi(
+                archivo_tif,
+                archivo_png,
+            )
 
             with open(archivo_tif, "rb") as imagen:
                 supabase.storage.from_(BUCKET).upload(
@@ -170,8 +256,8 @@ def generar_ndmi(
                     imagen.read(),
                     {
                         "content-type": "image/tiff",
-                        "upsert": "true"
-                    }
+                        "upsert": "true",
+                    },
                 )
 
             with open(archivo_png, "rb") as imagen:
@@ -180,11 +266,54 @@ def generar_ndmi(
                     imagen.read(),
                     {
                         "content-type": "image/png",
-                        "upsert": "true"
-                    }
+                        "upsert": "true",
+                    },
                 )
 
+        fechas_escenas, consulta_limitada = (
+            consultar_escenas_referencia(
+                zona,
+                fecha_inicio.isoformat(),
+                fecha_fin.isoformat(),
+            )
+        )
+
+        metadata = {
+            "fecha_inicio_periodo": fecha_inicio.isoformat(),
+            "fecha_fin_periodo": fecha_fin.isoformat(),
+            "fecha_procesamiento": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "fechas_escenas_referencia": fechas_escenas,
+            "ultima_fecha_escena_referencia": (
+                fechas_escenas[-1]
+                if fechas_escenas
+                else None
+            ),
+            "consulta_escenas_limitada": consulta_limitada,
+            "nota": (
+                "NDMI calculado como mediana temporal por píxel en openEO. "
+                "Las fechas STAC indican escenas candidatas con nubosidad "
+                "global <=20 %, no prueban que todas contribuyeran "
+                "al resultado ni representan una captura única. "
+                "Si no hay fechas, el índice aún puede ser válido."
+            ),
+        }
+
+        try:
+            guardar_metadata_ndmi(
+                ruta_metadata,
+                metadata,
+            )
+
+        except Exception as error:
+            print(
+                "ADVERTENCIA AL GUARDAR METADATA NDMI:",
+                repr(error),
+            )
+
         return {
+            **metadata,
             "parcela_id": parcela_id,
             "nombre": parcela["nombre"],
             "indice": "NDMI",
@@ -198,11 +327,12 @@ def generar_ndmi(
 
     except HTTPException:
         raise
+
     except Exception as error:
         print("ERROR GENERANDO NDMI:", repr(error))
         raise HTTPException(
             status_code=500,
-            detail="No se pudo generar y guardar el mapa NDMI"
+            detail="No se pudo generar y guardar el mapa NDMI",
         )
 
 
@@ -223,33 +353,37 @@ def obtener_url_ndmi(
         if not respuesta.data:
             raise HTTPException(
                 status_code=404,
-                detail="Parcela no encontrada"
+                detail="Parcela no encontrada",
             )
 
         carpeta = f"parcelas/{parcela_id}/ndmi"
+
         archivos = supabase.storage.from_(BUCKET).list(carpeta)
 
         if not archivos:
             raise HTTPException(
                 status_code=404,
-                detail="No hay mapas NDMI para esta parcela"
+                detail="No hay mapas NDMI para esta parcela",
             )
 
         nombres = [
-            a["name"]
-            for a in archivos
-            if a["name"].endswith((".png", ".tif"))
+            archivo["name"]
+            for archivo in archivos
+            if archivo["name"].endswith((".png", ".tif"))
         ]
 
         if not nombres:
             raise HTTPException(
                 status_code=404,
-                detail="No se encontraron mapas NDMI"
+                detail="No se encontraron mapas NDMI",
             )
 
         periodos = sorted(
-            {Path(nombre).stem for nombre in nombres},
-            reverse=True
+            {
+                Path(nombre).stem
+                for nombre in nombres
+            },
+            reverse=True,
         )
 
         periodo = periodos[0]
@@ -257,6 +391,7 @@ def obtener_url_ndmi(
         if f"{periodo}.png" in nombres:
             nombre_archivo = f"{periodo}.png"
             formato = "PNG"
+
         else:
             nombre_archivo = f"{periodo}.tif"
             formato = "GeoTIFF"
@@ -265,7 +400,10 @@ def obtener_url_ndmi(
 
         resultado = supabase.storage.from_(
             BUCKET
-        ).create_signed_url(ruta, 3600)
+        ).create_signed_url(
+            ruta,
+            3600,
+        )
 
         url = (
             resultado.get("signedURL")
@@ -275,10 +413,34 @@ def obtener_url_ndmi(
         if not url:
             raise HTTPException(
                 status_code=500,
-                detail="No se pudo generar el enlace"
+                detail="No se pudo generar el enlace",
             )
 
+        metadata = leer_metadata_ndmi(
+            f"{carpeta}/{periodo}.json"
+        )
+
+        if metadata is None:
+            partes = periodo.split("_")
+
+            metadata = {
+                "fecha_inicio_periodo": (
+                    partes[0] if len(partes) == 2 else None
+                ),
+                "fecha_fin_periodo": (
+                    partes[1] if len(partes) == 2 else None
+                ),
+                "fecha_procesamiento": None,
+                "fechas_escenas_referencia": [],
+                "ultima_fecha_escena_referencia": None,
+                "nota": (
+                    "Mapa anterior sin metadatos de captura; "
+                    "regenéralo para obtener referencias."
+                ),
+            }
+
         return {
+            **metadata,
             "parcela_id": parcela_id,
             "indice": "NDMI",
             "archivo": nombre_archivo,
@@ -289,11 +451,12 @@ def obtener_url_ndmi(
 
     except HTTPException:
         raise
+
     except Exception as error:
         print("ERROR URL NDMI:", repr(error))
         raise HTTPException(
             status_code=500,
-            detail="No se pudo generar la URL del mapa NDMI"
+            detail="No se pudo generar la URL del mapa NDMI",
         )
 
 
@@ -320,7 +483,7 @@ def generar_rgb_reciente(
         if not respuesta.data:
             raise HTTPException(
                 status_code=404,
-                detail="Parcela no encontrada"
+                detail="Parcela no encontrada",
             )
 
         parcela = respuesta.data[0]
@@ -328,15 +491,16 @@ def generar_rgb_reciente(
         if not parcela.get("perimetro"):
             raise HTTPException(
                 status_code=400,
-                detail="La parcela no tiene perímetro"
+                detail="La parcela no tiene perímetro",
             )
 
         try:
             zona = obtener_zona(parcela["perimetro"])
+
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail="Perímetro de parcela inválido"
+                detail="Perímetro de parcela inválido",
             )
 
         with tempfile.TemporaryDirectory() as temporal:
@@ -347,10 +511,13 @@ def generar_rgb_reciente(
                 zona,
                 archivo_tif,
                 dias=dias,
-                nubosidad_max=nubosidad_max
+                nubosidad_max=nubosidad_max,
             )
 
-            crear_png_rgb(archivo_tif, archivo_png)
+            crear_png_rgb(
+                archivo_tif,
+                archivo_png,
+            )
 
             fecha = date.fromisoformat(
                 resultado["fecha_captura"][:10]
@@ -366,8 +533,8 @@ def generar_rgb_reciente(
                     archivo.read(),
                     {
                         "content-type": "image/tiff",
-                        "upsert": "true"
-                    }
+                        "upsert": "true",
+                    },
                 )
 
             with open(archivo_png, "rb") as archivo:
@@ -376,8 +543,8 @@ def generar_rgb_reciente(
                     archivo.read(),
                     {
                         "content-type": "image/png",
-                        "upsert": "true"
-                    }
+                        "upsert": "true",
+                    },
                 )
 
         return {
@@ -399,16 +566,18 @@ def generar_rgb_reciente(
 
     except HTTPException:
         raise
+
     except ValueError as error:
         raise HTTPException(
             status_code=422,
-            detail=str(error)
+            detail=str(error),
         )
+
     except Exception as error:
         print("ERROR GENERANDO RGB:", repr(error))
         raise HTTPException(
             status_code=500,
-            detail="No se pudo generar y guardar la imagen RGB"
+            detail="No se pudo generar y guardar la imagen RGB",
         )
 
 
@@ -429,7 +598,7 @@ def obtener_url_rgb(
         if not respuesta.data:
             raise HTTPException(
                 status_code=404,
-                detail="Parcela no encontrada"
+                detail="Parcela no encontrada",
             )
 
         carpeta = f"parcelas/{parcela_id}/rgb"
@@ -438,17 +607,17 @@ def obtener_url_rgb(
 
         nombres = sorted(
             [
-                a["name"]
-                for a in archivos
-                if a["name"].endswith(".png")
+                archivo["name"]
+                for archivo in archivos
+                if archivo["name"].endswith(".png")
             ],
-            reverse=True
+            reverse=True,
         )
 
         if not nombres:
             raise HTTPException(
                 status_code=404,
-                detail="No hay imágenes RGB para esta parcela"
+                detail="No hay imágenes RGB para esta parcela",
             )
 
         nombre = nombres[0]
@@ -457,7 +626,7 @@ def obtener_url_rgb(
             BUCKET
         ).create_signed_url(
             f"{carpeta}/{nombre}",
-            3600
+            3600,
         )
 
         url = (
@@ -468,7 +637,7 @@ def obtener_url_rgb(
         if not url:
             raise HTTPException(
                 status_code=500,
-                detail="No se pudo generar el enlace RGB"
+                detail="No se pudo generar el enlace RGB",
             )
 
         return {
@@ -482,9 +651,10 @@ def obtener_url_rgb(
 
     except HTTPException:
         raise
+
     except Exception as error:
         print("ERROR URL RGB:", repr(error))
         raise HTTPException(
             status_code=500,
-            detail="No se pudo obtener la URL de la imagen RGB"
+            detail="No se pudo obtener la URL de la imagen RGB",
         )
