@@ -157,3 +157,38 @@ def exportar_ndmi(zona, fecha_inicio, fecha_fin, destino):
     ).download(destino)
 
     return destino
+def crear_png_ndmi(archivo_tif, archivo_png):
+    import numpy as np
+    import tifffile
+    from PIL import Image
+
+    ndmi = tifffile.imread(archivo_tif).astype(np.float32)
+
+    validos = np.isfinite(ndmi) & (ndmi >= -1) & (ndmi <= 1)
+
+    if not np.any(validos):
+        raise ValueError("El mapa NDMI no contiene datos válidos")
+
+    valores = [-1, -0.2, 0, 0.2, 0.4, 1]
+
+    colores = [
+        (165, 0, 38),
+        (244, 109, 67),
+        (254, 224, 139),
+        (166, 217, 106),
+        (26, 150, 65),
+        (33, 102, 172)
+    ]
+
+    rgba = np.zeros((*ndmi.shape, 4), dtype=np.uint8)
+
+    for canal in range(3):
+        rgba[:, :, canal] = np.interp(
+            ndmi, valores, [color[canal] for color in colores]
+        ).astype(np.uint8)
+
+    rgba[:, :, 3] = np.where(validos, 255, 0)
+
+    Image.fromarray(rgba, "RGBA").save(archivo_png)
+
+    return archivo_png

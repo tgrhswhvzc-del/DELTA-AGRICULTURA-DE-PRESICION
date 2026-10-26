@@ -11,7 +11,8 @@ from supabase_client import supabase
 from motor_satelital import (
     obtener_zona,
     conectar_copernicus,
-    exportar_ndmi
+    exportar_ndmi,
+    crear_png_ndmi
 )
 from seguridad_satelital import verificar_propietario
 
@@ -20,6 +21,8 @@ router = APIRouter(
     prefix="/satelite",
     tags=["Satelite"]
 )
+
+BUCKET = "mapas-satelitales"
 
 
 @router.get("/estado")
@@ -154,36 +157,54 @@ def generar_ndmi(
                 detail="La parcela no tiene perímetro"
             )
 
-        zona = obtener_zona(
-            parcela["perimetro"]
+        zona = obtener_zona(parcela["perimetro"])
+
+        fechas = (
+            f"{fecha_inicio.isoformat()}_"
+            f"{fecha_fin.isoformat()}"
         )
 
-        with tempfile.TemporaryDirectory() as temporal:
-            archivo = str(
-                Path(temporal) / "ndmi.tif"
-            )
+        carpeta = f"parcelas/{parcela_id}/ndmi"
 
+        ruta_tif = f"{carpeta}/{fechas}.tif"
+        ruta_png = f"{carpeta}/{fechas}.png"
+
+        with tempfile.TemporaryDirectory() as temporal:
+            archivo_tif = str(Path(temporal) / "ndmi.tif")
+            archivo_png = str(Path(temporal) / "ndmi.png")
+
+            # Descargar NDMI desde Copernicus
             exportar_ndmi(
                 zona,
                 fecha_inicio.isoformat(),
                 fecha_fin.isoformat(),
-                archivo
+                archivo_tif
             )
 
-            ruta_storage = (
-                f"parcelas/{parcela_id}/ndmi/"
-                f"{fecha_inicio.isoformat()}_"
-                f"{fecha_fin.isoformat()}.tif"
+            # Crear visualización PNG
+            crear_png_ndmi(
+                archivo_tif,
+                archivo_png
             )
 
-            with open(archivo, "rb") as imagen:
-                supabase.storage.from_(
-                    "mapas-satelitales"
-                ).upload(
-                    ruta_storage,
+            # Guardar GeoTIFF original
+            with open(archivo_tif, "rb") as imagen:
+                supabase.storage.from_(BUCKET).upload(
+                    ruta_tif,
                     imagen.read(),
                     {
                         "content-type": "image/tiff",
+                        "upsert": "true"
+                    }
+                )
+
+            # Guardar PNG a color
+            with open(archivo_png, "rb") as imagen:
+                supabase.storage.from_(BUCKET).upload(
+                    ruta_png,
+                    imagen.read(),
+                    {
+                        "content-type": "image/png",
                         "upsert": "true"
                     }
                 )
@@ -194,7 +215,9 @@ def generar_ndmi(
             "indice": "NDMI",
             "fecha_inicio": fecha_inicio.isoformat(),
             "fecha_fin": fecha_fin.isoformat(),
-            "archivo": ruta_storage,
+            "archivo": ruta_tif,
+            "archivo_tif": ruta_tif,
+            "archivo_png": ruta_png,
             "almacenamiento": "Supabase Storage privado"
         }
 
@@ -230,10 +253,10 @@ def obtener_url_ndmi(
                 detail="Parcela no encontrada"
             )
 
-        archivos = supabase.storage.from_(
-            "mapas-satelitales"
-        ).list(
-            f"parcelas/{parcela_id}/ndmi"
+        carpeta = f"parcelas/{parcela_id}/ndmi"
+
+        archivos = supabase.storage.from_(BUCKET).list(
+            carpeta
         )
 
         if not archivos:
@@ -242,31 +265,37 @@ def obtener_url_ndmi(
                 detail="No hay mapas NDMI para esta parcela"
             )
 
-        archivos_tif = sorted(
-            [
-                a["name"]
-                for a in archivos
-                if a["name"].endswith(".tif")
-            ],
-            reverse=True
-        )
+        nombres = [
+            archivo["name"]
+            for archivo in archivos
+            if archivo["name"].endswith((".png", ".tif"))
+        ]
 
-        if not archivos_tif:
+        if not nombres:
             raise HTTPException(
                 status_code=404,
                 detail="No se encontraron mapas NDMI"
             )
 
-        nombre_archivo = archivos_tif[0]
-
-        ruta = (
-            f"parcelas/{parcela_id}/ndmi/"
-            f"{nombre_archivo}"
+        # Seleccionar el período más reciente
+        periodos = sorted(
+            {Path(nombre).stem for nombre in nombres},
+            reverse=True
         )
 
-        resultado = supabase.storage.from_(
-            "mapas-satelitales"
-        ).create_signed_url(
+        periodo = periodos[0]
+
+        # Preferir imagen visual PNG
+        if f"{periodo}.png" in nombres:
+            nombre_archivo = f"{periodo}.png"
+            formato = "PNG"
+        else:
+            nombre_archivo = f"{periodo}.tif"
+            formato = "GeoTIFF"
+
+        ruta = f"{carpeta}/{nombre_archivo}"
+
+        resultado = supabase.storage.from_(BUCKET).create_signed_url(
             ruta,
             3600
         )
@@ -284,7 +313,9 @@ def obtener_url_ndmi(
 
         return {
             "parcela_id": parcela_id,
+            "indice": "NDMI",
             "archivo": nombre_archivo,
+            "formato": formato,
             "url": url,
             "expira_en_segundos": 3600
         }
