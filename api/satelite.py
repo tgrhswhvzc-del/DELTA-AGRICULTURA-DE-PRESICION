@@ -8,6 +8,10 @@ import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
+import tifffile
+from PIL import Image
+
 from fastapi import APIRouter, HTTPException, Header, Query, Depends
 
 from supabase_client import supabase
@@ -16,6 +20,7 @@ from motor_satelital import (
     conectar_copernicus,
     exportar_ndmi,
     crear_png_ndmi,
+    exportar_ndvi,
     exportar_rgb_reciente,
     crear_png_rgb,
 )
@@ -23,12 +28,20 @@ from seguridad_satelital import verificar_propietario
 
 
 router = APIRouter(prefix="/satelite", tags=["Satelite"])
+
 BUCKET = "mapas-satelitales"
 STAC_URL = "https://stac.dataspace.copernicus.eu/v1/search"
 
 
+# =====================================================
+# CONSULTA DE ESCENAS SATELITALES
+# =====================================================
+
 def consultar_escenas_referencia(zona, fecha_inicio, fecha_fin):
-    """Consulta escenas candidatas, sin atribuirlas directamente al NDMI."""
+    """
+    Consulta escenas Sentinel-2 candidatas.
+    No atribuye esas fechas directamente a cada píxel.
+    """
 
     consulta = {
         "collections": ["sentinel-2-l2a"],
@@ -51,6 +64,7 @@ def consultar_escenas_referencia(zona, fecha_inicio, fecha_fin):
             json=consulta,
             timeout=20,
         )
+
         respuesta.raise_for_status()
 
         escenas = respuesta.json().get("features", [])
@@ -65,10 +79,19 @@ def consultar_escenas_referencia(zona, fecha_inicio, fecha_fin):
 
         return fechas, len(escenas) >= 100
 
-    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
-        print("ADVERTENCIA STAC NDMI:", repr(error))
+    except (
+        requests.RequestException,
+        ValueError,
+        KeyError,
+        TypeError,
+    ) as error:
+        print("ADVERTENCIA STAC:", repr(error))
         return [], False
 
+
+# =====================================================
+# METADATOS NDMI EXISTENTES
+# =====================================================
 
 def guardar_metadata_ndmi(ruta, metadata):
     contenido = json.dumps(
@@ -96,6 +119,10 @@ def leer_metadata_ndmi(ruta):
         return None
 
 
+# =====================================================
+# ESTADO DEL SERVICIO
+# =====================================================
+
 @router.get("/estado")
 def estado_satelite():
     return {
@@ -103,6 +130,10 @@ def estado_satelite():
         "estado": "funcionando",
     }
 
+
+# =====================================================
+# CONSULTAR ZONA DE UNA PARCELA
+# =====================================================
 
 @router.get("/parcela/{parcela_id}/zona")
 def consultar_zona_parcela(
@@ -149,11 +180,16 @@ def consultar_zona_parcela(
 
     except Exception as error:
         print("ERROR SATELITAL:", repr(error))
+
         raise HTTPException(
             status_code=500,
             detail="Error al consultar la parcela",
         )
 
+
+# =====================================================
+# DIAGNÓSTICO PRIVADO DE COPERNICUS
+# =====================================================
 
 @router.get("/diagnostico-copernicus", include_in_schema=False)
 def diagnostico_copernicus(
@@ -173,15 +209,23 @@ def diagnostico_copernicus(
     try:
         conectar_copernicus()
 
-        return {"copernicus": "conectado"}
+        return {
+            "copernicus": "conectado",
+        }
 
     except Exception as error:
         print("ERROR COPERNICUS:", repr(error))
+
         raise HTTPException(
             status_code=503,
             detail="No se pudo conectar con Copernicus",
         )
 
+
+# =====================================================
+# NDMI - GENERAR
+# SE CONSERVA SU FUNCIONAMIENTO
+# =====================================================
 
 @router.post("/parcela/{parcela_id}/ndmi")
 def generar_ndmi(
@@ -330,11 +374,17 @@ def generar_ndmi(
 
     except Exception as error:
         print("ERROR GENERANDO NDMI:", repr(error))
+
         raise HTTPException(
             status_code=500,
             detail="No se pudo generar y guardar el mapa NDMI",
         )
 
+
+# =====================================================
+# NDMI - CONSULTAR URL
+# SE CONSERVA SU FUNCIONAMIENTO
+# =====================================================
 
 @router.get("/parcela/{parcela_id}/ndmi/url")
 def obtener_url_ndmi(
@@ -454,15 +504,17 @@ def obtener_url_ndmi(
 
     except Exception as error:
         print("ERROR URL NDMI:", repr(error))
+
         raise HTTPException(
             status_code=500,
             detail="No se pudo generar la URL del mapa NDMI",
         )
 
 
-# ========================================
-# IMÁGENES RGB RECIENTES DE COPERNICUS
-# ========================================
+# =====================================================
+# RGB - GENERAR
+# SE CONSERVA SU FUNCIONAMIENTO
+# =====================================================
 
 @router.post("/parcela/{parcela_id}/rgb")
 def generar_rgb_reciente(
@@ -575,11 +627,17 @@ def generar_rgb_reciente(
 
     except Exception as error:
         print("ERROR GENERANDO RGB:", repr(error))
+
         raise HTTPException(
             status_code=500,
             detail="No se pudo generar y guardar la imagen RGB",
         )
 
+
+# =====================================================
+# RGB - CONSULTAR URL
+# SE CONSERVA SU FUNCIONAMIENTO
+# =====================================================
 
 @router.get("/parcela/{parcela_id}/rgb/url")
 def obtener_url_rgb(
@@ -654,7 +712,393 @@ def obtener_url_rgb(
 
     except Exception as error:
         print("ERROR URL RGB:", repr(error))
+
         raise HTTPException(
             status_code=500,
             detail="No se pudo obtener la URL de la imagen RGB",
+        )
+
+
+# =====================================================
+# NDVI - CREAR IMAGEN PNG
+# NUEVA FUNCIÓN INDEPENDIENTE
+# =====================================================
+
+def crear_png_ndvi(archivo_tif, archivo_png):
+    datos = tifffile.imread(archivo_tif).astype(np.float32)
+    ndvi = np.squeeze(datos)
+
+    if ndvi.ndim != 2:
+        raise ValueError(
+            "El NDVI debe contener una sola banda"
+        )
+
+    validos = (
+        np.isfinite(ndvi)
+        & (ndvi >= -1)
+        & (ndvi <= 1)
+    )
+
+    if not np.any(validos):
+        raise ValueError(
+            "El NDVI no contiene datos válidos"
+        )
+
+    valores = [
+        -1,
+        0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1,
+    ]
+
+    colores = [
+        (112, 79, 53),
+        (190, 165, 112),
+        (229, 209, 120),
+        (185, 207, 94),
+        (102, 170, 75),
+        (36, 125, 57),
+        (12, 81, 44),
+    ]
+
+    limpio = np.nan_to_num(
+        ndvi,
+        nan=-1,
+        posinf=1,
+        neginf=-1,
+    )
+
+    rgba = np.zeros(
+        (*ndvi.shape, 4),
+        dtype=np.uint8,
+    )
+
+    for canal in range(3):
+        rgba[:, :, canal] = np.interp(
+            limpio,
+            valores,
+            [color[canal] for color in colores],
+        ).astype(np.uint8)
+
+    rgba[:, :, 3] = np.where(
+        validos,
+        255,
+        0,
+    ).astype(np.uint8)
+
+    Image.fromarray(
+        rgba,
+        "RGBA",
+    ).save(archivo_png)
+
+    return archivo_png
+
+
+# =====================================================
+# NDVI - GENERAR
+# NUEVO ENDPOINT INDEPENDIENTE
+# =====================================================
+
+@router.post("/parcela/{parcela_id}/ndvi")
+def generar_ndvi(
+    parcela_id: str,
+    fecha_inicio: date = Query(
+        default_factory=lambda: date.today() - timedelta(days=30)
+    ),
+    fecha_fin: date = Query(default_factory=date.today),
+    usuario_id: str = Depends(verificar_propietario),
+):
+    if fecha_inicio > fecha_fin:
+        raise HTTPException(
+            status_code=400,
+            detail="Rango de fechas inválido",
+        )
+
+    if fecha_fin > date.today():
+        raise HTTPException(
+            status_code=400,
+            detail="La fecha final no puede ser futura",
+        )
+
+    if (fecha_fin - fecha_inicio).days > 90:
+        raise HTTPException(
+            status_code=400,
+            detail="El período máximo es de 90 días",
+        )
+
+    try:
+        respuesta = (
+            supabase.table("parcelas")
+            .select("id,nombre,perimetro")
+            .eq("id", parcela_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not respuesta.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Parcela no encontrada",
+            )
+
+        parcela = respuesta.data[0]
+
+        if not parcela.get("perimetro"):
+            raise HTTPException(
+                status_code=400,
+                detail="La parcela no tiene perímetro",
+            )
+
+        zona = obtener_zona(
+            parcela["perimetro"]
+        )
+
+        periodo = (
+            f"{fecha_inicio.isoformat()}_"
+            f"{fecha_fin.isoformat()}"
+        )
+
+        carpeta = f"parcelas/{parcela_id}/ndvi"
+
+        ruta_tif = f"{carpeta}/{periodo}.tif"
+        ruta_png = f"{carpeta}/{periodo}.png"
+        ruta_json = f"{carpeta}/{periodo}.json"
+
+        with tempfile.TemporaryDirectory() as temporal:
+            tif_local = str(
+                Path(temporal) / "ndvi.tif"
+            )
+
+            png_local = str(
+                Path(temporal) / "ndvi.png"
+            )
+
+            exportar_ndvi(
+                zona,
+                fecha_inicio.isoformat(),
+                fecha_fin.isoformat(),
+                tif_local,
+            )
+
+            crear_png_ndvi(
+                tif_local,
+                png_local,
+            )
+
+            for local, remoto, tipo in (
+                (tif_local, ruta_tif, "image/tiff"),
+                (png_local, ruta_png, "image/png"),
+            ):
+                with open(local, "rb") as archivo:
+                    supabase.storage.from_(BUCKET).upload(
+                        remoto,
+                        archivo.read(),
+                        {
+                            "content-type": tipo,
+                            "upsert": "true",
+                        },
+                    )
+
+        fechas, limitada = consultar_escenas_referencia(
+            zona,
+            fecha_inicio.isoformat(),
+            fecha_fin.isoformat(),
+        )
+
+        metadata = {
+            "fecha_inicio_periodo": fecha_inicio.isoformat(),
+            "fecha_fin_periodo": fecha_fin.isoformat(),
+            "fecha_procesamiento": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "fechas_escenas_referencia": fechas,
+            "ultima_fecha_escena_referencia": (
+                fechas[-1] if fechas else None
+            ),
+            "consulta_escenas_limitada": limitada,
+            "nota": (
+                "NDVI calculado mediante mediana temporal "
+                "por píxel. Las escenas STAC son candidatas "
+                "y no representan necesariamente la fecha "
+                "exacta de cada píxel."
+            ),
+        }
+
+        try:
+            supabase.storage.from_(BUCKET).upload(
+                ruta_json,
+                json.dumps(
+                    metadata,
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+                {
+                    "content-type": "application/json",
+                    "upsert": "true",
+                },
+            )
+
+        except Exception as error:
+            print(
+                "ADVERTENCIA METADATOS NDVI:",
+                repr(error),
+            )
+
+        return {
+            **metadata,
+            "parcela_id": parcela_id,
+            "nombre": parcela["nombre"],
+            "indice": "NDVI",
+            "archivo_tif": ruta_tif,
+            "archivo_png": ruta_png,
+            "almacenamiento": "Supabase Storage privado",
+        }
+
+    except HTTPException:
+        raise
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=str(error),
+        )
+
+    except Exception as error:
+        print(
+            "ERROR GENERANDO NDVI:",
+            repr(error),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar NDVI",
+        )
+
+
+# =====================================================
+# NDVI - CONSULTAR URL Y METADATOS
+# NUEVO ENDPOINT INDEPENDIENTE
+# =====================================================
+
+@router.get("/parcela/{parcela_id}/ndvi/url")
+def obtener_url_ndvi(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    try:
+        respuesta = (
+            supabase.table("parcelas")
+            .select("id")
+            .eq("id", parcela_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not respuesta.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Parcela no encontrada",
+            )
+
+        carpeta = f"parcelas/{parcela_id}/ndvi"
+
+        archivos = (
+            supabase.storage.from_(BUCKET).list(carpeta)
+            or []
+        )
+
+        nombres = sorted(
+            [
+                archivo["name"]
+                for archivo in archivos
+                if archivo["name"].lower().endswith(".png")
+            ],
+            reverse=True,
+        )
+
+        if not nombres:
+            raise HTTPException(
+                status_code=404,
+                detail="No hay mapas NDVI para esta parcela",
+            )
+
+        nombre = nombres[0]
+        periodo = Path(nombre).stem
+
+        resultado = supabase.storage.from_(
+            BUCKET
+        ).create_signed_url(
+            f"{carpeta}/{nombre}",
+            3600,
+        )
+
+        url = (
+            resultado.get("signedURL")
+            or resultado.get("signedUrl")
+        )
+
+        if not url:
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo generar el enlace NDVI",
+            )
+
+        metadata = None
+
+        try:
+            contenido = supabase.storage.from_(
+                BUCKET
+            ).download(
+                f"{carpeta}/{periodo}.json"
+            )
+
+            metadata = json.loads(
+                contenido.decode("utf-8")
+            )
+
+        except Exception as error:
+            print(
+                "ADVERTENCIA METADATOS NDVI:",
+                repr(error),
+            )
+
+        if not isinstance(metadata, dict):
+            partes = periodo.split("_")
+
+            metadata = {
+                "fecha_inicio_periodo": (
+                    partes[0] if len(partes) == 2 else None
+                ),
+                "fecha_fin_periodo": (
+                    partes[1] if len(partes) == 2 else None
+                ),
+                "fecha_procesamiento": None,
+                "fechas_escenas_referencia": [],
+                "ultima_fecha_escena_referencia": None,
+            }
+
+        return {
+            **metadata,
+            "parcela_id": parcela_id,
+            "indice": "NDVI",
+            "archivo": nombre,
+            "formato": "PNG",
+            "url": url,
+            "expira_en_segundos": 3600,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        print(
+            "ERROR URL NDVI:",
+            repr(error),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo consultar el NDVI",
         )
