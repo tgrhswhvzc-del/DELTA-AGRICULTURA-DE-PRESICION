@@ -1,5 +1,4 @@
 
-
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -154,8 +153,19 @@ def exportar_ndmi(zona, fecha_inicio, fecha_fin, destino):
     return destino
 
 
+# ---------------------------------------------
+# NDMI - VISUALIZACIÓN DE ALTO CONTRASTE
+# ---------------------------------------------
+
 def crear_png_ndmi(archivo_tif, archivo_png):
-    ndmi = tifffile.imread(archivo_tif).astype(np.float32)
+    ndmi = np.squeeze(
+        tifffile.imread(archivo_tif).astype(np.float32)
+    )
+
+    if ndmi.ndim != 2:
+        raise ValueError(
+            "El NDMI debe contener una sola banda"
+        )
 
     validos = (
         np.isfinite(ndmi)
@@ -164,36 +174,85 @@ def crear_png_ndmi(archivo_tif, archivo_png):
     )
 
     if not np.any(validos):
-        raise ValueError("El mapa NDMI no contiene datos válidos")
+        raise ValueError(
+            "El mapa NDMI no contiene datos válidos"
+        )
 
-    valores = [-1, -0.2, 0, 0.2, 0.4, 1]
+    datos_validos = ndmi[validos]
+
+    # Contraste adaptativo entre percentiles 5 y 95.
+    minimo = float(
+        np.percentile(datos_validos, 5)
+    )
+
+    maximo = float(
+        np.percentile(datos_validos, 95)
+    )
+
+    # Evita divisiones entre cero y contrastes extremos.
+    if maximo - minimo < 0.05:
+        centro = (minimo + maximo) / 2
+        minimo = centro - 0.025
+        maximo = centro + 0.025
+
+    normalizado = np.zeros_like(
+        ndmi,
+        dtype=np.float32
+    )
+
+    normalizado[validos] = np.clip(
+        (ndmi[validos] - minimo) / (maximo - minimo),
+        0,
+        1
+    )
+
+    # Colores de NDMI:
+    # Rojo: valores relativamente bajos.
+    # Naranja y amarillo: intermedios bajos.
+    # Verde: intermedios.
+    # Cian y azul: valores relativamente altos.
+
+    posiciones = [
+        0.0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1.0
+    ]
 
     colores = [
-        (165, 0, 38),
-        (244, 109, 67),
-        (254, 224, 139),
-        (166, 217, 106),
-        (26, 150, 65),
-        (33, 102, 172)
+        (195, 0, 25),
+        (255, 105, 0),
+        (255, 235, 0),
+        (42, 215, 25),
+        (0, 200, 235),
+        (15, 35, 200)
     ]
 
     rgba = np.zeros(
-        (*ndmi.shape, 4),
+        (ndmi.shape[0], ndmi.shape[1], 4),
         dtype=np.uint8
     )
 
     for canal in range(3):
         rgba[:, :, canal] = np.interp(
-            ndmi,
-            valores,
+            normalizado,
+            posiciones,
             [color[canal] for color in colores]
         ).astype(np.uint8)
 
+    # Los píxeles sin datos serán transparentes.
     rgba[:, :, 3] = np.where(
-        validos, 255, 0
+        validos,
+        255,
+        0
     ).astype(np.uint8)
 
-    Image.fromarray(rgba, "RGBA").save(archivo_png)
+    Image.fromarray(
+        rgba,
+        "RGBA"
+    ).save(archivo_png)
 
     return archivo_png
 
@@ -292,6 +351,7 @@ def exportar_rgb_reciente(
     )
 
     inicio = fecha_captura.date().isoformat()
+
     fin = (
         fecha_captura.date() + timedelta(days=1)
     ).isoformat()
@@ -331,34 +391,50 @@ def exportar_rgb_reciente(
 
 
 def crear_png_rgb(archivo_tif, archivo_png):
-    # GeoTIFF con bandas B04, B03 y B02
+    # GeoTIFF con bandas B04, B03 y B02.
     with tifffile.TiffFile(archivo_tif) as tif:
         datos = tif.asarray()
 
-    datos = np.asarray(datos, dtype=np.float32)
+    datos = np.asarray(
+        datos,
+        dtype=np.float32
+    )
 
     if datos.ndim != 3:
         raise ValueError(
             "El archivo RGB debe contener tres bandas"
         )
 
-    # Aceptar bandas primero o bandas al final
+    # Aceptar bandas primero o bandas al final.
     if datos.shape[0] == 3:
-        datos = np.moveaxis(datos, 0, -1)
+        datos = np.moveaxis(
+            datos,
+            0,
+            -1
+        )
+
     elif datos.shape[-1] != 3:
         raise ValueError(
             "No se encontraron las tres bandas RGB"
         )
 
-    validos = np.all(np.isfinite(datos), axis=2)
+    validos = np.all(
+        np.isfinite(datos),
+        axis=2
+    )
 
-    # Los valores Sentinel-2 L2A suelen estar
-    # expresados en escala de reflectancia x10000.
     # Contraste visual fijo de 0 a 3000.
-    rgb = np.clip(datos / 3000.0, 0, 1)
+    rgb = np.clip(
+        datos / 3000.0,
+        0,
+        1
+    )
 
-    # Corrección gamma para visualizar
-    rgb = np.power(rgb, 1 / 1.2)
+    # Corrección gamma.
+    rgb = np.power(
+        rgb,
+        1 / 1.2
+    )
 
     rgba = np.zeros(
         (datos.shape[0], datos.shape[1], 4),
@@ -370,7 +446,9 @@ def crear_png_rgb(archivo_tif, archivo_png):
     ).astype(np.uint8)
 
     rgba[:, :, 3] = np.where(
-        validos, 255, 0
+        validos,
+        255,
+        0
     ).astype(np.uint8)
 
     Image.fromarray(
