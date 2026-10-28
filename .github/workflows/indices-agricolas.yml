@@ -3,12 +3,17 @@ name: DELTA - Indices agricolas
 
 on:
   workflow_dispatch:
+    inputs:
+      parcela_id:
+        description: "ID de la parcela solicitada"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: delta-indices-agricolas
+  group: delta-indices-${{ inputs.parcela_id }}
   cancel-in-progress: false
 
 jobs:
@@ -32,9 +37,10 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Calcular NDVI y NDMI
+      - name: Calcular indices
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           OPENEO_REFRESH_TOKEN: ${{ secrets.OPENEO_REFRESH_TOKEN }}
+          PARCELA_ID: ${{ inputs.parcela_id }}
         run: python actualizar_indices.py
