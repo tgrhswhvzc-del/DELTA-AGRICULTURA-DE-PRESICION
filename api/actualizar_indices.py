@@ -1,7 +1,10 @@
 
+import os
+import tempfile
+
+from uuid import UUID
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import tempfile
 
 import numpy as np
 import tifffile
@@ -48,35 +51,31 @@ def actualizar_parcela(parcela):
         print("Sin imágenes útiles:", parcela_id)
         return
 
-    # Buscar la observación más reciente no procesada.
-    escena_nueva = None
+    # Usar únicamente la escena más reciente.
+    escena = escenas[0]
+    fecha_escena = escena["fecha"][:10]
 
-    for escena in escenas:
-        fecha = escena["fecha"][:10]
+    existente = (
+        supabase.table("indices_agricolas")
+        .select("id")
+        .eq("parcela_id", parcela_id)
+        .eq("fecha_escena_referencia", fecha_escena)
+        .limit(1)
+        .execute()
+    )
 
-        existente = (
-            supabase.table("indices_agricolas")
-            .select("id")
-            .eq("parcela_id", parcela_id)
-            .eq("fecha_escena_referencia", fecha)
-            .limit(1)
-            .execute()
+    if existente.data:
+        print(
+            "Índices ya actualizados:",
+            parcela_id,
+            fecha_escena,
         )
-
-        if existente.data:
-            print("Última observación ya registrada:", parcela_id)
-            return
-
-        escena_nueva = escena
-        break
-
-    if not escena_nueva:
         return
 
-    fecha_escena = escena_nueva["fecha"][:10]
+    fecha_inicio = datetime.fromisoformat(
+        fecha_escena
+    ).date()
 
-    # Procesar únicamente el día de la escena seleccionada.
-    fecha_inicio = datetime.fromisoformat(fecha_escena).date()
     fecha_fin = fecha_inicio + timedelta(days=1)
 
     print("Procesando parcela:", parcela_id)
@@ -125,28 +124,35 @@ def actualizar_parcela(parcela):
 
 
 def main():
+    parcela_id = os.getenv("PARCELA_ID", "").strip()
+
+    if not parcela_id:
+        raise ValueError(
+            "Falta PARCELA_ID. No se procesará ninguna parcela."
+        )
+
+    try:
+        parcela_id = str(UUID(parcela_id))
+    except ValueError:
+        raise ValueError("PARCELA_ID no es un UUID válido")
+
     respuesta = (
         supabase.table("parcelas")
         .select("id,perimetro")
-        .not_.is_("perimetro", "null")
-        .limit(20)
+        .eq("id", parcela_id)
+        .limit(1)
         .execute()
     )
 
-    parcelas = respuesta.data or []
+    if not respuesta.data:
+        raise ValueError("Parcela no encontrada")
 
-    print("Parcelas encontradas:", len(parcelas))
+    parcela = respuesta.data[0]
 
-    for parcela in parcelas:
-        try:
-            actualizar_parcela(parcela)
+    if not parcela.get("perimetro"):
+        raise ValueError("La parcela no tiene perímetro")
 
-        except Exception as error:
-            print(
-                "Error procesando parcela:",
-                parcela["id"],
-                repr(error),
-            )
+    actualizar_parcela(parcela)
 
 
 if __name__ == "__main__":

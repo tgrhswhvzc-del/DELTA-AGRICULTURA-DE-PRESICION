@@ -1102,3 +1102,186 @@ def obtener_url_ndvi(
             status_code=500,
             detail="No se pudo consultar el NDVI",
         )
+
+
+# =====================================================
+# DELTA - CONSULTAR NDVI Y NDMI GUARDADOS
+# =====================================================
+
+@router.get("/parcela/{parcela_id}/indices")
+def consultar_indices_parcela(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    try:
+        resultado = (
+            supabase.table("indices_agricolas")
+            .select(
+                "fecha_escena_referencia,"
+                "fecha_procesamiento,"
+                "ndvi_promedio,"
+                "ndmi_promedio"
+            )
+            .eq("parcela_id", parcela_id)
+            .order("fecha_escena_referencia", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        return {
+            "parcela_id": parcela_id,
+            "disponible": bool(resultado.data),
+            "indices": resultado.data[0] if resultado.data else None,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        print("ERROR CONSULTANDO INDICES:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudieron consultar los indices",
+        )
+
+
+# =====================================================
+# DELTA - ACTUALIZACION BAJO DEMANDA
+# =====================================================
+
+@router.post(
+    "/parcela/{parcela_id}/indices/actualizar",
+    status_code=202,
+)
+def solicitar_actualizacion_indices(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    from motor_satelital import buscar_imagenes_recientes
+
+    try:
+        respuesta = (
+            supabase.table("parcelas")
+            .select("id,perimetro")
+            .eq("id", parcela_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not respuesta.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Parcela no encontrada",
+            )
+
+        perimetro = respuesta.data[0].get("perimetro")
+
+        if not perimetro:
+            raise HTTPException(
+                status_code=400,
+                detail="La parcela no tiene perimetro",
+            )
+
+        zona = obtener_zona(perimetro)
+
+        escenas = buscar_imagenes_recientes(
+            zona,
+            dias=30,
+            nubosidad_max=20,
+        )["utiles"]
+
+        if not escenas:
+            return {
+                "estado": "sin_escenas_utiles",
+                "parcela_id": parcela_id,
+            }
+
+        fecha_escena = escenas[0]["fecha"][:10]
+
+        existente = (
+            supabase.table("indices_agricolas")
+            .select("id")
+            .eq("parcela_id", parcela_id)
+            .eq("fecha_escena_referencia", fecha_escena)
+            .limit(1)
+            .execute()
+        )
+
+        if existente.data:
+            return {
+                "estado": "actualizado",
+                "parcela_id": parcela_id,
+                "fecha_escena_referencia": fecha_escena,
+            }
+
+        token = os.getenv("GITHUB_ACTIONS_TOKEN")
+
+        if not token:
+            raise HTTPException(
+                status_code=503,
+                detail="Actualizacion bajo demanda no configurada",
+            )
+
+        url = (
+            "https://api.github.com/repos/"
+            "tgrhswhvzc-del/"
+            "DELTA-AGRICULTURA-DE-PRESICION/"
+            "actions/workflows/"
+            "indices-agricolas.yml/dispatches"
+        )
+
+        lanzamiento = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            json={
+                "ref": "main",
+                "inputs": {
+                    "parcela_id": parcela_id,
+                },
+            },
+            timeout=15,
+        )
+
+        if lanzamiento.status_code != 204:
+            print(
+                "ERROR GITHUB:",
+                lanzamiento.status_code,
+                lanzamiento.text[:250],
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="No se pudo iniciar el procesamiento",
+            )
+
+        return {
+            "estado": "procesamiento_solicitado",
+            "parcela_id": parcela_id,
+            "fecha_escena_referencia": fecha_escena,
+        }
+
+    except HTTPException:
+        raise
+
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Perimetro invalido",
+        )
+
+    except requests.RequestException as error:
+        print("ERROR GITHUB:", repr(error))
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub no disponible",
+        )
+
+    except Exception as error:
+        print("ERROR ACTUALIZANDO INDICES:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo solicitar la actualizacion",
+        )
