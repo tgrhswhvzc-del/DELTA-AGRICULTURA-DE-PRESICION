@@ -1,3 +1,4 @@
+
 fastapi
 uvicorn
 python-dotenv
@@ -7,4 +8,4 @@ openeo==0.53.0
 numpy
 tifffile
 Pillow
-
+rasterio
