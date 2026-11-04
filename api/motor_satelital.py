@@ -463,7 +463,7 @@ def crear_png_rgb(archivo_tif, archivo_png):
 # ---------------------------------------------
 
 def calcular_indices_avanzados(zona, fecha_inicio, fecha_fin):
-    from openeo.processes import array_element, if_
+    from openeo.processes import array_element, if_, and_
 
     conexion = conectar_copernicus()
 
@@ -487,7 +487,7 @@ def calcular_indices_avanzados(zona, fecha_inicio, fecha_fin):
         scl = array_element(datos, label="SCL")
 
         return if_(
-            (scl == 4) & (nir > 0),
+            and_(scl == 4, nir > 0),
             swir / nir,
             None
         )
@@ -499,7 +499,7 @@ def calcular_indices_avanzados(zona, fecha_inicio, fecha_fin):
         suma = nir + red
 
         return if_(
-            (scl == 4) & (suma > 0),
+            and_(scl == 4, suma > 0),
             (nir - red) / suma,
             None
         )
