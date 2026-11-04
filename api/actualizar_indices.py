@@ -190,6 +190,8 @@ def _publicar_avanzados(parcela_id, fecha, perimetro, zona, perimetro_hash):
                 )
 
         except Exception as error:
+            import traceback
+            traceback.print_exc()
             print(
                 "ERROR publicando",
                 indice.upper(),
