@@ -469,27 +469,17 @@ def calcular_indices_avanzados(zona, fecha_inicio, fecha_fin):
         "SENTINEL2_L2A",
         spatial_extent=zona,
         temporal_extent=[fecha_inicio, fecha_fin],
-        bands=["B05", "B8A", "B11"],
+        bands=["B05", "B8A", "B11", "SCL"],
         max_cloud_cover=20
     )
 
     cubo = cubo.resample_spatial(
         resolution=20,
         projection=obtener_proyeccion_utm(zona),
-        method="bilinear"
+        method="near"
     )
 
-    scl = conexion.load_collection(
-        "SENTINEL2_L2A",
-        spatial_extent=zona,
-        temporal_extent=[fecha_inicio, fecha_fin],
-        bands=["SCL"],
-        max_cloud_cover=20
-    )
-
-    scl = scl.resample_cube_spatial(
-        cubo, method="near"
-    ).band("SCL")
+    scl = cubo.band("SCL")
 
     red_edge = cubo.band("B05")
     nir = cubo.band("B8A")
