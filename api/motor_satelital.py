@@ -463,6 +463,8 @@ def crear_png_rgb(archivo_tif, archivo_png):
 # ---------------------------------------------
 
 def calcular_indices_avanzados(zona, fecha_inicio, fecha_fin):
+    from openeo.processes import array_element, if_
+
     conexion = conectar_copernicus()
 
     cubo = conexion.load_collection(
@@ -479,22 +481,37 @@ def calcular_indices_avanzados(zona, fecha_inicio, fecha_fin):
         method="near"
     )
 
-    scl = cubo.band("SCL")
+    def calcular_msi(datos):
+        nir = array_element(datos, label="B8A")
+        swir = array_element(datos, label="B11")
+        scl = array_element(datos, label="SCL")
 
-    red_edge = cubo.band("B05")
-    nir = cubo.band("B8A")
-    swir = cubo.band("B11")
+        return if_(
+            (scl == 4) & (nir > 0),
+            swir / nir,
+            None
+        )
 
-    vegetacion = scl == 4
+    def calcular_ndre(datos):
+        nir = array_element(datos, label="B8A")
+        red = array_element(datos, label="B05")
+        scl = array_element(datos, label="SCL")
+        suma = nir + red
 
-    msi = (swir / nir).mask(
-        (~vegetacion) | (nir <= 0)
+        return if_(
+            (scl == 4) & (suma > 0),
+            (nir - red) / suma,
+            None
+        )
+
+    msi = cubo.reduce_dimension(
+        dimension="bands",
+        reducer=calcular_msi
     )
 
-    suma = nir + red_edge
-
-    ndre = ((nir - red_edge) / suma).mask(
-        (~vegetacion) | (suma <= 0)
+    ndre = cubo.reduce_dimension(
+        dimension="bands",
+        reducer=calcular_ndre
     )
 
     return {
