@@ -93,6 +93,111 @@ def _guardar(ruta, archivo, content_type):
         )
 
 
+
+
+def _publicar_avanzados(parcela_id, fecha, perimetro, zona, perimetro_hash):
+    """Publica MSI y NDRE sin bloquear NDVI y NDMI."""
+
+    from motor_satelital import exportar_msi, exportar_ndre
+
+    fin = (
+        datetime.fromisoformat(fecha).date()
+        + timedelta(days=1)
+    ).isoformat()
+
+    for indice, exportar in (
+        ("msi", exportar_msi),
+        ("ndre", exportar_ndre),
+    ):
+        try:
+            anterior = metadata_remota(parcela_id, indice, fecha)
+
+            if (
+                anterior
+                and anterior.get("version_analisis") == VERSION_ANALISIS
+                and anterior.get("perimetro_recortado") is True
+                and anterior.get("perimetro_hash") == perimetro_hash
+                and anterior.get("fecha_escena_referencia") == fecha
+            ):
+                print(indice.upper(), "vigente", flush=True)
+                continue
+
+            with tempfile.TemporaryDirectory() as temporal:
+                carpeta_local = Path(temporal)
+
+                origen = str(carpeta_local / "origen.tif")
+                tif = str(carpeta_local / "mapa.tif")
+                png = str(carpeta_local / "mapa.png")
+
+                exportar(zona, fecha, fin, origen)
+
+                estadistica = procesar_indice(
+                    origen,
+                    perimetro,
+                    indice,
+                    png,
+                    tif,
+                )
+
+                carpeta = f"parcelas/{parcela_id}/{indice}"
+
+                metadata = {
+                    **estadistica,
+                    "indice": indice.upper(),
+                    "parcela_id": parcela_id,
+                    "fecha_escena_referencia": fecha,
+                    "fecha_inicio_periodo": fecha,
+                    "fecha_fin_periodo": fecha,
+                    "fecha_procesamiento": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "nota": (
+                        "Indicador satelital orientativo. "
+                        "No constituye un diagnostico agronomico."
+                    ),
+                }
+
+                ruta_json = carpeta_local / "mapa.json"
+
+                ruta_json.write_text(
+                    json.dumps(metadata, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+                _guardar(
+                    f"{carpeta}/{fecha}.tif",
+                    tif,
+                    "image/tiff",
+                )
+
+                _guardar(
+                    f"{carpeta}/{fecha}.png",
+                    png,
+                    "image/png",
+                )
+
+                _guardar(
+                    f"{carpeta}/{fecha}.json",
+                    str(ruta_json),
+                    "application/json",
+                )
+
+                print(
+                    indice.upper(),
+                    "publicado:",
+                    estadistica["promedio"],
+                    flush=True,
+                )
+
+        except Exception as error:
+            print(
+                "ERROR publicando",
+                indice.upper(),
+                repr(error),
+                flush=True,
+            )
+
+
 def actualizar_parcela(parcela):
     parcela_id = str(parcela["id"])
 
@@ -131,6 +236,7 @@ def actualizar_parcela(parcela):
                 parcela_id,
                 fecha,
             )
+            _publicar_avanzados(parcela_id, fecha, perimetro, zona, perimetro_hash)
             return
 
         inicio = fecha
@@ -275,6 +381,7 @@ def actualizar_parcela(parcela):
                     resultado["ndmi"]["estadistica"]["promedio"],
                     flush=True,
                 )
+                _publicar_avanzados(parcela_id, fecha, perimetro, zona, perimetro_hash)
                 return
 
         except ValueError as error:
