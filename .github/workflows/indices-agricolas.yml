@@ -9,6 +9,19 @@ on:
         required: true
         type: string
 
+      forzar_regeneracion:
+        description: "Recalcular mapas existentes"
+        required: false
+        type: boolean
+        default: false
+      solo_validar:
+        description: "Calcular sin publicar mapas"
+        required: false
+        type: boolean
+        default: false
+
+
+
 permissions:
   contents: read
 
@@ -43,4 +56,6 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           OPENEO_REFRESH_TOKEN: ${{ secrets.OPENEO_REFRESH_TOKEN }}
           PARCELA_ID: ${{ inputs.parcela_id }}
+          FORZAR_REGENERACION: ${{ inputs.forzar_regeneracion }}
+          SOLO_VALIDAR: ${{ inputs.solo_validar }}
         run: python actualizar_indices.py

@@ -125,7 +125,7 @@ def actualizar_parcela(parcela):
     for fecha in fechas:
         if _ya_procesado(
             parcela_id, fecha, perimetro_hash
-        ):
+        ) and os.getenv("FORZAR_REGENERACION") != "true":
             print(
                 "Observación y mapas vigentes:",
                 parcela_id,
@@ -200,6 +200,20 @@ def actualizar_parcela(parcela):
                         "tif": tif_final,
                         "png": png_final,
                     }
+
+                if os.getenv("SOLO_VALIDAR") == "true":
+                    for indice, item in resultado.items():
+                        print(
+                            "VALIDADO",
+                            indice.upper(),
+                            "Promedio:",
+                            item["estadistica"]["promedio"],
+                            "Cobertura:",
+                            item["estadistica"]["cobertura_parcela"],
+                            flush=True,
+                        )
+                    print("PRUEBA COMPLETA: sin publicar mapas", flush=True)
+                    return
 
                 ahora = datetime.now(
                     timezone.utc
