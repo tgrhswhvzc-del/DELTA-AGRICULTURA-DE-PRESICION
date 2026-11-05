@@ -19,28 +19,8 @@ from rasterio.warp import (
 VERSION_ANALISIS = 2
 NODATA = -9999.0
 COBERTURA_MINIMA = 0.50
-RANGOS = {
-    "ndvi": (-1, 1),
-    "ndmi": (-1, 1),
-    "ndre": (-1, 1),
-    "msi": (0, 5),
-}
 
 ESCALAS = {
-    "msi": [
-        (0.0, "#0c512c"),
-        (0.5, "#66aa4b"),
-        (1.0, "#ffeb00"),
-        (1.5, "#ff6900"),
-        (2.0, "#c30019"),
-    ],
-    "ndre": [
-        (-1.0, "#a52a2a"),
-        (-0.2, "#e57942"),
-        (0.2, "#f5d864"),
-        (0.5, "#66aa4b"),
-        (1.0, "#0c512c"),
-    ],
     "ndvi": [
         (-1.0, "#704f35"),
         (0.0, "#bea570"),
@@ -118,7 +98,7 @@ def _colorear(matriz, mascara, indice):
 
     for canal in range(3):
         rgba[:, :, canal] = np.interp(
-            np.clip(matriz, posiciones[0], posiciones[-1]),
+            np.clip(matriz, -1, 1),
             posiciones,
             canales[:, canal],
         ).astype(np.uint8)
@@ -167,8 +147,8 @@ def procesar_indice(
         validos = (
             geometria
             & np.isfinite(original)
-            & (original >= RANGOS[indice][0])
-            & (original <= RANGOS[indice][1])
+            & (original >= -1)
+            & (original <= 1)
         )
 
         if fuente.nodata is not None and np.isfinite(fuente.nodata):
@@ -236,8 +216,8 @@ def procesar_indice(
 
     visibles = (
         np.isfinite(imagen)
-        & (imagen >= RANGOS[indice][0])
-        & (imagen <= RANGOS[indice][1])
+        & (imagen >= -1)
+        & (imagen <= 1)
     )
 
     if not visibles.any():

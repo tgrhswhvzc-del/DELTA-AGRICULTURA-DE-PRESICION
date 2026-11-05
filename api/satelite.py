@@ -185,82 +185,6 @@ def _url_indice_v2(parcela_id, indice):
 # CONSULTA DE ESCENAS SATELITALES
 # =====================================================
 
-
-def _url_indice_avanzado(parcela_id, indice):
-    registro, _ = _ultimo_paquete_v2(parcela_id)
-
-    if registro is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Primero debe existir un paquete NDVI/NDMI "
-                "coherente para esta parcela."
-            ),
-        )
-
-    respuesta = (
-        supabase.table("parcelas")
-        .select("perimetro")
-        .eq("id", parcela_id)
-        .limit(1)
-        .execute()
-    )
-
-    if not respuesta.data or not respuesta.data[0].get("perimetro"):
-        raise HTTPException(
-            status_code=404,
-            detail="La parcela no tiene perimetro",
-        )
-
-    perimetro_hash = firma_perimetro(
-        respuesta.data[0]["perimetro"]
-    )
-
-    fecha = str(
-        registro["fecha_escena_referencia"]
-    )[:10]
-
-    metadata = _metadatos_v2(
-        parcela_id,
-        indice,
-        fecha,
-        perimetro_hash,
-    )
-
-    if not metadata:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Mapa {indice.upper()} no disponible todavia.",
-        )
-
-    ruta = f"parcelas/{parcela_id}/{indice}/{fecha}.png"
-
-    firmado = (
-        supabase.storage.from_(BUCKET)
-        .create_signed_url(ruta, 3600)
-    )
-
-    url = (
-        firmado.get("signedURL")
-        or firmado.get("signedUrl")
-    )
-
-    if not url:
-        raise HTTPException(
-            status_code=503,
-            detail=f"No se pudo firmar el mapa {indice.upper()}",
-        )
-
-    return {
-        **metadata,
-        "parcela_id": parcela_id,
-        "indice": indice.upper(),
-        "archivo": f"{fecha}.png",
-        "formato": "PNG",
-        "url": url,
-        "expira_en_segundos": 3600,
-    }
-
 def consultar_escenas_referencia(
     zona,
     fecha_inicio,
@@ -1256,62 +1180,6 @@ def obtener_url_ndvi(
 # ÍNDICES AGRÍCOLAS - CONSULTA
 # =====================================================
 
-
-# =====================================================
-# MSI Y NDRE - CONSULTAR URL
-# =====================================================
-
-@router.get("/parcela/{parcela_id}/msi/url")
-def obtener_url_msi(
-    parcela_id: str,
-    usuario_id: str = Depends(verificar_propietario),
-):
-    try:
-        return _url_indice_avanzado(
-            parcela_id,
-            "msi",
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print(
-            "ERROR URL MSI:",
-            repr(error)
-        )
-
-        raise HTTPException(
-            status_code=503,
-            detail="No se pudo consultar el mapa MSI",
-        )
-
-
-@router.get("/parcela/{parcela_id}/ndre/url")
-def obtener_url_ndre(
-    parcela_id: str,
-    usuario_id: str = Depends(verificar_propietario),
-):
-    try:
-        return _url_indice_avanzado(
-            parcela_id,
-            "ndre",
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print(
-            "ERROR URL NDRE:",
-            repr(error)
-        )
-
-        raise HTTPException(
-            status_code=503,
-            detail="No se pudo consultar el mapa NDRE",
-        )
-
 @router.get("/parcela/{parcela_id}/indices")
 def consultar_indices_parcela(
     parcela_id: str,
@@ -1428,15 +1296,6 @@ def solicitar_actualizacion_indices(
                 and str(
                     registro["fecha_escena_referencia"]
                 )[:10] == fecha_escena
-                and all(
-                    _metadatos_v2(
-                        parcela_id,
-                        indice,
-                        fecha_escena,
-                        firma_perimetro(perimetro)
-                    )
-                    for indice in ("msi", "ndre")
-                )
             ):
                 return {
                     "estado": "actualizado",

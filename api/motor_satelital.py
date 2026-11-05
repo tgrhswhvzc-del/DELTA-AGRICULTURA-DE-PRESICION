@@ -77,7 +77,7 @@ def calcular_indices(zona, fecha_inicio, fecha_fin):
         "SENTINEL2_L2A",
         spatial_extent=zona,
         temporal_extent=[fecha_inicio, fecha_fin],
-        bands=["B04", "B05", "B08", "B8A", "B11"],
+        bands=["B04", "B08", "B11"],
         max_cloud_cover=20
     )
 
@@ -457,88 +457,3 @@ def crear_png_rgb(archivo_tif, archivo_png):
     ).save(archivo_png)
 
     return archivo_png
-
-# ---------------------------------------------
-# DELTA - MSI Y NDRE
-# ---------------------------------------------
-
-def calcular_indices_avanzados(zona, fecha_inicio, fecha_fin):
-    from openeo.processes import array_element, if_, and_
-
-    conexion = conectar_copernicus()
-
-    cubo = conexion.load_collection(
-        "SENTINEL2_L2A",
-        spatial_extent=zona,
-        temporal_extent=[fecha_inicio, fecha_fin],
-        bands=["B05", "B8A", "B11", "SCL"],
-        max_cloud_cover=20
-    )
-
-    cubo = cubo.resample_spatial(
-        resolution=20,
-        projection=obtener_proyeccion_utm(zona),
-        method="near"
-    )
-
-    def calcular_msi(datos):
-        nir = array_element(datos, label="B8A")
-        swir = array_element(datos, label="B11")
-        scl = array_element(datos, label="SCL")
-
-        return if_(
-            and_(scl == 4, nir > 0),
-            swir / nir,
-            None
-        )
-
-    def calcular_ndre(datos):
-        nir = array_element(datos, label="B8A")
-        red = array_element(datos, label="B05")
-        scl = array_element(datos, label="SCL")
-        suma = nir + red
-
-        return if_(
-            and_(scl == 4, suma > 0),
-            (nir - red) / suma,
-            None
-        )
-
-    msi = cubo.reduce_dimension(
-        dimension="bands",
-        reducer=calcular_msi
-    )
-
-    ndre = cubo.reduce_dimension(
-        dimension="bands",
-        reducer=calcular_ndre
-    )
-
-    return {
-        "msi": msi.reduce_dimension(
-            dimension="t", reducer="median"
-        ),
-        "ndre": ndre.reduce_dimension(
-            dimension="t", reducer="median"
-        )
-    }
-
-
-def exportar_msi(zona, fecha_inicio, fecha_fin, destino):
-    indices = calcular_indices_avanzados(
-        zona, fecha_inicio, fecha_fin
-    )
-    indices["msi"].save_result(
-        format="GTiff"
-    ).download(destino)
-    return destino
-
-
-def exportar_ndre(zona, fecha_inicio, fecha_fin, destino):
-    indices = calcular_indices_avanzados(
-        zona, fecha_inicio, fecha_fin
-    )
-    indices["ndre"].save_result(
-        format="GTiff"
-    ).download(destino)
-    return destino
