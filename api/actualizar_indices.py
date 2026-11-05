@@ -169,12 +169,23 @@ def actualizar_parcela(parcela):
                         directorio / f"{indice}.png"
                     )
 
+                    import time
+                    comienzo = time.monotonic()
+                    print(f"INICIANDO DESCARGA {indice.upper()}", flush=True)
+
                     exportar(
                         zona,
                         inicio,
                         fin,
                         tif_origen,
                     )
+
+                    print(
+                        f"DESCARGA {indice.upper()} COMPLETADA EN "
+                        f"{time.monotonic() - comienzo:.1f} SEGUNDOS",
+                        flush=True,
+                    )
+                    print(f"PROCESANDO MAPA {indice.upper()}", flush=True)
 
                     estadistica = procesar_indice(
                         tif_origen,
