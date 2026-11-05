@@ -105,7 +105,7 @@ def calcular_indices(zona, fecha_inicio, fecha_fin):
     swir = cubo.band("B11")
     scl = cubo_scl.band("SCL")
 
-    mascara_valida = (scl == 4) | (scl == 5)
+    mascara_valida = (scl == 4) | (scl == 5) | (scl == 7)
 
     ndvi = (nir - rojo) / (nir + rojo)
     ndmi = (nir - swir) / (nir + swir)
