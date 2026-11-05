@@ -134,9 +134,11 @@ def exportar_ndvi(zona, fecha_inicio, fecha_fin, destino):
         zona, fecha_inicio, fecha_fin
     )
 
-    indices["ndvi"].save_result(
-        format="GTiff"
-    ).download(destino)
+    indices["ndvi"].execute_batch(
+        outputfile=destino,
+        out_format="GTiff",
+        title="DELTA NDVI"
+    )
 
     return destino
 
@@ -146,9 +148,11 @@ def exportar_ndmi(zona, fecha_inicio, fecha_fin, destino):
         zona, fecha_inicio, fecha_fin
     )
 
-    indices["ndmi"].save_result(
-        format="GTiff"
-    ).download(destino)
+    indices["ndmi"].execute_batch(
+        outputfile=destino,
+        out_format="GTiff",
+        title="DELTA NDMI"
+    )
 
     return destino
 
