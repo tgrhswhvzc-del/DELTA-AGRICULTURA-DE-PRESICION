@@ -1,0 +1,45 @@
+name: DELTA - Revision programada MSI NDRE
+
+on:
+  schedule:
+    # Media hora después de la revisión base de NDVI/NDMI (UTC).
+    - cron: '53 1,7,13,19 * * *'
+  workflow_dispatch:
+    inputs:
+      solo_revisar:
+        description: "Simular sin iniciar calculos ni publicar"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: delta-revision-avanzados
+  cancel-in-progress: false
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+      - name: Revisar mapas avanzados faltantes
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOLO_REVISAR: ${{ inputs.solo_revisar || 'false' }}
+        run: python revisar_avanzados_programado.py

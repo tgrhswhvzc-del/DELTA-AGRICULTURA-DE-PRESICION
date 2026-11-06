@@ -1,4 +1,5 @@
 name: DELTA - Validar o publicar MSI y NDRE
+run-name: MSI-NDRE ${{ inputs.parcela_id }} ${{ inputs.fecha_escena }}
 
 on:
   workflow_dispatch:
