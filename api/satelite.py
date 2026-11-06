@@ -1396,3 +1396,57 @@ def solicitar_actualizacion_indices(
             status_code=500,
             detail="No se pudo solicitar la actualización",
         )
+
+# =====================================================
+# DELTA - MAPAS AVANZADOS MSI / NDRE (SOLO CONSULTA)
+# =====================================================
+
+def _url_mapa_avanzado(parcela_id: str, indice: str):
+    registro, mapas = _ultimo_paquete_v2(parcela_id)
+    if registro is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Primero se necesita un paquete NDVI/NDMI vigente",
+        )
+
+    fecha = str(registro["fecha_escena_referencia"])[:10]
+    # El paquete base ya comprobó el perímetro actual de la parcela.
+    perimetro_hash = mapas["ndvi"]["perimetro_hash"]
+    metadata = _metadatos_v2(parcela_id, indice, fecha, perimetro_hash)
+    if metadata is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mapa {indice.upper()} no disponible para la fecha vigente",
+        )
+
+    ruta = f"parcelas/{parcela_id}/{indice}/{fecha}.png"
+    firmado = supabase.storage.from_(BUCKET).create_signed_url(ruta, 3600)
+    url = firmado.get("signedURL") or firmado.get("signedUrl")
+    if not url:
+        raise HTTPException(status_code=503, detail="No se pudo firmar el mapa")
+
+    return {
+        **metadata,
+        "parcela_id": parcela_id,
+        "indice": indice.upper(),
+        "archivo": f"{fecha}.png",
+        "formato": "PNG",
+        "url": url,
+        "expira_en_segundos": 3600,
+    }
+
+
+@router.get("/parcela/{parcela_id}/ndre/url")
+def obtener_url_ndre(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    return _url_mapa_avanzado(parcela_id, "ndre")
+
+
+@router.get("/parcela/{parcela_id}/msi/url")
+def obtener_url_msi(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    return _url_mapa_avanzado(parcela_id, "msi")
