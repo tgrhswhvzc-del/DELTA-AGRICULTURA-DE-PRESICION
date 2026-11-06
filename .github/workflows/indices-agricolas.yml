@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: delta-indices-${{ inputs.parcela_id }}
@@ -59,3 +60,17 @@ jobs:
           FORZAR_REGENERACION: ${{ inputs.forzar_regeneracion }}
           SOLO_VALIDAR: ${{ inputs.solo_validar }}
         run: python actualizar_indices.py
+
+      # DELTA_AUTO_AVANZADOS_DESPUES_BASE
+      # Una vez que se publican NDVI/NDMI, solicitar MSI/NDRE para la misma parcela.
+      # Un fallo de Copernicus o GitHub no debe marcar los índices base como fallidos.
+      - name: Solicitar MSI y NDRE de esta parcela
+        if: ${{ success() && inputs.solo_validar != true }}
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          PARCELA_ID: ${{ inputs.parcela_id }}
+          SOLO_REVISAR: 'false'
+        run: python revisar_avanzados_programado.py

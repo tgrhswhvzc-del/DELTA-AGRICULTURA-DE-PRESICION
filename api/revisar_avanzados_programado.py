@@ -94,7 +94,16 @@ def main():
     if not token and not solo_revisar:
         raise RuntimeError("Falta GH_TOKEN (usar secrets.GITHUB_TOKEN en Actions)")
 
-    parcelas = seleccionar_lote(cargar_parcelas())
+    # DELTA_AUTO_PARCELA_OBJETIVO: si el workflow base indica una parcela,
+    # se revisa solo esa. Sin PARCELA_ID se conserva el lote programado usual.
+    parcela_objetivo = os.getenv("PARCELA_ID", "").strip()
+    disponibles = cargar_parcelas()
+    if parcela_objetivo:
+        parcelas = [p for p in disponibles if str(p["id"]) == parcela_objetivo]
+        if not parcelas:
+            raise ValueError(f"La parcela solicitada no existe o no tiene perimetro: {parcela_objetivo}")
+    else:
+        parcelas = seleccionar_lote(disponibles)
     print(f"DELTA avanzados: revisando {len(parcelas)} parcelas", flush=True)
     errores = []
     with requests.Session() as sesion:
