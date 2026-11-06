@@ -1450,3 +1450,127 @@ def obtener_url_msi(
     usuario_id: str = Depends(verificar_propietario),
 ):
     return _url_mapa_avanzado(parcela_id, "msi")
+
+# =====================================================
+# DELTA - SOLICITUD AUTOMATICA MSI Y NDRE POR PARCELA
+# =====================================================
+
+@router.post("/parcela/{parcela_id}/indices-avanzados/actualizar", status_code=202)
+def solicitar_indices_avanzados_automaticos(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    """Dispara el publicador SOLO si faltan mapas para el paquete NDVI/NDMI vigente.
+
+    El acceso requiere la misma autorización que los endpoints de mapas.
+    Evita recrear mapas existentes y consulta las ejecuciones de GitHub para
+    reducir solicitudes duplicadas entre navegadores y productores.
+    """
+    import re
+    from uuid import UUID
+
+    try:
+        parcela_id = str(UUID(parcela_id))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Identificador de parcela inválido")
+
+    try:
+        registro, mapas = _ultimo_paquete_v2(parcela_id)
+        if registro is None:
+            return {"estado": "esperando_indices_base", "parcela_id": parcela_id}
+
+        fecha = str(registro["fecha_escena_referencia"])[:10]
+        hash_perimetro = mapas["ndvi"]["perimetro_hash"]
+        faltantes = [
+            indice for indice in ("ndre", "msi")
+            if _metadatos_v2(parcela_id, indice, fecha, hash_perimetro) is None
+        ]
+        if not faltantes:
+            return {
+                "estado": "actualizado", "parcela_id": parcela_id,
+                "fecha_escena_referencia": fecha,
+            }
+
+        token = os.getenv("GITHUB_ACTIONS_TOKEN")
+        if not token:
+            raise HTTPException(
+                status_code=503,
+                detail="Falta GITHUB_ACTIONS_TOKEN en el servidor",
+            )
+
+        raiz_gh = (
+            "https://api.github.com/repos/tgrhswhvzc-del/"
+            "DELTA-AGRICULTURA-DE-PRESICION/actions/workflows/"
+            "publicar-indices-avanzados.yml"
+        )
+        cabeceras = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        # GitHub muestra este identificador en el título de cada ejecución.
+        nombre_ejecucion = f"MSI-NDRE {parcela_id} {fecha}"
+        lista = requests.get(
+            raiz_gh + "/runs",
+            params={"event": "workflow_dispatch", "per_page": 100},
+            headers=cabeceras,
+            timeout=15,
+        )
+        if lista.status_code != 200:
+            print("DELTA AVANZADOS - Consulta GitHub falló:", lista.status_code)
+            raise HTTPException(status_code=503, detail="No se pudo consultar el estado del procesador")
+
+        ahora = datetime.now(timezone.utc)
+        for ejecucion in lista.json().get("workflow_runs", []):
+            if ejecucion.get("display_title") != nombre_ejecucion:
+                continue
+            creada = str(ejecucion.get("created_at") or "")
+            try:
+                edad = (ahora - datetime.fromisoformat(creada.replace("Z", "+00:00"))).total_seconds()
+            except (ValueError, TypeError):
+                edad = 999999
+            estado = ejecucion.get("status")
+            if estado != "completed" and edad < 10800:
+                return {
+                    "estado": "en_proceso", "parcela_id": parcela_id,
+                    "fecha_escena_referencia": fecha,
+                }
+            # Si GitHub ya terminó pero Storage aún no refleja ambos mapas,
+            # dar margen para evitar otro cálculo de pago inmediato.
+            if estado == "completed" and 0 <= edad < 600:
+                return {
+                    "estado": "revisando_publicacion", "parcela_id": parcela_id,
+                    "fecha_escena_referencia": fecha,
+                }
+            break  # Solo importa la ejecución más reciente de esta parcela y fecha.
+
+        lanzamiento = requests.post(
+            raiz_gh + "/dispatches",
+            headers=cabeceras,
+            json={
+                "ref": "main",
+                "inputs": {
+                    "parcela_id": parcela_id,
+                    "fecha_escena": fecha,
+                    "publicar": "true",
+                },
+            },
+            timeout=15,
+        )
+        if lanzamiento.status_code != 204:
+            print("DELTA AVANZADOS - Dispatch falló:", lanzamiento.status_code, lanzamiento.text[:300])
+            raise HTTPException(status_code=503, detail="No se pudo iniciar la generación de MSI y NDRE")
+
+        return {
+            "estado": "procesamiento_solicitado", "parcela_id": parcela_id,
+            "fecha_escena_referencia": fecha,
+            "indices": faltantes,
+        }
+    except HTTPException:
+        raise
+    except requests.RequestException as error:
+        print("DELTA AVANZADOS - Error de GitHub:", repr(error))
+        raise HTTPException(status_code=503, detail="El procesador satelital no está disponible")
+    except Exception as error:
+        print("DELTA AVANZADOS - Error inesperado:", repr(error))
+        raise HTTPException(status_code=500, detail="No se pudo solicitar el cálculo avanzado")
