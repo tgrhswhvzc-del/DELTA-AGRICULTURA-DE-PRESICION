@@ -10,6 +10,7 @@ PUBLICAR_AVANZADOS: true para escribir los mapas; cualquier otro valor valida so
 import json
 import os
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -171,6 +172,30 @@ def _subir(ruta, origen, content_type):
         )
 
 
+def _ejecutar_batch_con_reintentos(cubo, origen, indice, fecha):
+    """Recupera errores HTTP 429 sin repetir exitos ni ocultar otros errores."""
+    esperas = (15, 30, 60, 120, 180)
+    for intento in range(len(esperas) + 1):
+        try:
+            cubo.execute_batch(
+                outputfile=str(origen), out_format="GTiff",
+                title=f"DELTA {indice.upper()} {fecha}",
+            )
+            return
+        except Exception as error:
+            mensaje = str(error).lower()
+            limitado = "[429]" in mensaje or "too many requests" in mensaje
+            if not limitado or intento >= len(esperas):
+                raise
+            espera = esperas[intento]
+            print(
+                f"DELTA {indice.upper()}: Copernicus limito solicitudes (429); "
+                f"reintento {intento + 1}/{len(esperas)} en {espera}s",
+                flush=True,
+            )
+            time.sleep(espera)
+
+
 def main():
     parcela_id = str(UUID(os.environ["PARCELA_ID"].strip()))
     fecha = date.fromisoformat(os.environ["FECHA_ESCENA"].strip()).isoformat()
@@ -197,10 +222,7 @@ def main():
             tif = carpeta / f"{indice}.tif"
             png = carpeta / f"{indice}.png"
             print(f"BATCH {indice.upper()}: iniciando", flush=True)
-            indices[indice].execute_batch(
-                outputfile=str(origen), out_format="GTiff",
-                title=f"DELTA {indice.upper()} {fecha}",
-            )
+            _ejecutar_batch_con_reintentos(indices[indice], origen, indice, fecha)
             estadistica = _procesar_mapa(origen, png, tif, perimetro, indice)
             print(
                 f"VALIDADO {indice.upper()}: promedio={estadistica['promedio']}, "
