@@ -1,0 +1,48 @@
+name: DELTA - Prueba mapas complementarios
+run-name: SAVI-EVI2-CAMBIO ${{ inputs.parcela_id }} ${{ inputs.fecha_escena }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      parcela_id:
+        description: "UUID de la parcela"
+        required: true
+        type: string
+      fecha_escena:
+        description: "Fecha satelital a probar (YYYY-MM-DD)"
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: delta-prueba-complementarios
+  cancel-in-progress: false
+jobs:
+  prueba:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: api/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Probar SAVI y EVI2 y cambio NDVI si hay historico
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENEO_REFRESH_TOKEN: ${{ secrets.OPENEO_REFRESH_TOKEN }}
+          PARCELA_ID: ${{ inputs.parcela_id }}
+          FECHA_ESCENA: ${{ inputs.fecha_escena }}
+        run: python probar_mapas_extra.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: DELTA-mapas-complementarios
+          path: api/artefactos/complementarios/
+          if-no-files-found: warn
