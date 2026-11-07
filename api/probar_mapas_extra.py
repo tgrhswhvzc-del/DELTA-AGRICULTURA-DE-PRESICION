@@ -142,20 +142,51 @@ def _mapa_cambios_ndvi(parcela_id, fecha_actual, poligono):
     print("CAMBIO NDVI OMITIDO: falta una fecha histórica comparable", flush=True)
 
 
-def _ejecutar_batch_con_reintentos(cubo, indice, destino):
-    import openeo
-    espera = [15, 30, 60, 120]
-    for intento in range(len(espera) + 1):
-        try:
-            cubo.execute_batch(outputfile=str(destino), out_format="GTiff", title=f"DELTA experimento {indice.upper()}")
-            return
-        except Exception as exc:
-            s = str(exc).lower()
-            if intento == len(espera) or not ("429" in s or "too many requests" in s):
-                raise
-            print(f"Copernicus 429; reintentando en {espera[intento]} s", flush=True)
-            time.sleep(espera[intento])
+def _es_error_temporal_copernicus(exc):
+    """Solo reintenta errores de disponibilidad, no errores matematicos o de datos."""
+    import re
+    mensaje = str(exc).lower()
+    return bool(re.search(r"(?<!\d)(?:429|500|502|503|504)(?!\d)", mensaje)) or any(
+        frase in mensaje for frase in (
+            "too many requests", "gateway time-out", "gateway timeout",
+            "service unavailable", "bad gateway", "connection timed out",
+        )
+    )
 
+
+def _reintentar_copernicus(operacion, descripcion):
+    """Maximo 6 intentos; espera progresiva para errores transitorios."""
+    esperas = (15, 30, 60, 120, 180)
+    for intento in range(len(esperas) + 1):
+        try:
+            return operacion()
+        except Exception as exc:
+            if intento == len(esperas) or not _es_error_temporal_copernicus(exc):
+                raise
+            print(
+                f"Copernicus temporalmente no disponible al {descripcion}: "
+                f"intento {intento + 1}/{len(esperas) + 1}, "
+                f"reintento en {esperas[intento]} s. Error: {str(exc)[:220]}",
+                flush=True,
+            )
+            time.sleep(esperas[intento])
+
+
+def _ejecutar_batch_con_reintentos(cubo, indice, destino):
+    return _reintentar_copernicus(
+        lambda: cubo.execute_batch(
+            outputfile=str(destino), out_format="GTiff",
+            title=f"DELTA experimento {indice.upper()}"
+        ),
+        f"iniciar/ejecutar batch {indice.upper()}",
+    )
+
+
+def _calcular_con_reintentos(zona, fecha, fin):
+    return _reintentar_copernicus(
+        lambda: calcular_savi_evi2(zona, fecha, fin),
+        "autenticar y preparar indices SAVI/EVI2",
+    )
 
 def main():
     parcela_id = str(UUID(os.environ["PARCELA_ID"].strip()))
@@ -169,7 +200,7 @@ def main():
     zona = obtener_zona(poligono)
     DESTINO.mkdir(parents=True, exist_ok=True)
     print(f"DELTA PRUEBA NUEVOS MAPAS: {parcela_id} / {fecha}", flush=True)
-    indices = calcular_savi_evi2(zona, fecha, fin)
+    indices = _calcular_con_reintentos(zona, fecha, fin)
     with tempfile.TemporaryDirectory() as td:
         for indice in ("savi", "evi2"):
             print(f"BATCH {indice.upper()}: iniciando", flush=True)
