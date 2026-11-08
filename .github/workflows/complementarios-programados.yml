@@ -1,0 +1,44 @@
+name: DELTA - Revision programada SAVI EVI2 y cambio NDVI
+
+on:
+  schedule:
+    # Después de la revisión de índices base (UTC).
+    - cron: '17 2,8,14,20 * * *'
+  workflow_dispatch:
+    inputs:
+      solo_revisar:
+        description: "Simular sin iniciar cálculos ni publicar"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: delta-revision-complementarios
+  cancel-in-progress: false
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: api/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Revisar y solicitar mapas complementarios
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          SOLO_REVISAR: ${{ inputs.solo_revisar || 'false' }}
+        run: python revisar_complementarios_programado.py

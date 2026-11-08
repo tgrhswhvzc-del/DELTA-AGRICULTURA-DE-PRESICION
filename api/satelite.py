@@ -1451,6 +1451,34 @@ def obtener_url_msi(
 ):
     return _url_mapa_avanzado(parcela_id, "msi")
 
+
+# =====================================================
+# DELTA - MAPAS COMPLEMENTARIOS (SOLO CONSULTA)
+# =====================================================
+
+@router.get("/parcela/{parcela_id}/savi/url")
+def obtener_url_savi(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    return _url_mapa_avanzado(parcela_id, "savi")
+
+
+@router.get("/parcela/{parcela_id}/evi2/url")
+def obtener_url_evi2(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    return _url_mapa_avanzado(parcela_id, "evi2")
+
+
+@router.get("/parcela/{parcela_id}/cambio-ndvi/url")
+def obtener_url_cambio_ndvi(
+    parcela_id: str,
+    usuario_id: str = Depends(verificar_propietario),
+):
+    return _url_mapa_avanzado(parcela_id, "cambio_ndvi")
+
 # =====================================================
 # DELTA - SOLICITUD AUTOMATICA MSI Y NDRE POR PARCELA
 # =====================================================

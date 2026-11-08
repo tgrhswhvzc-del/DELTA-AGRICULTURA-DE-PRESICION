@@ -61,6 +61,20 @@ jobs:
           SOLO_VALIDAR: ${{ inputs.solo_validar }}
         run: python actualizar_indices.py
 
+      # DELTA_AUTO_COMPLEMENTARIOS_DESPUES_BASE
+      # Se despacha SAVI/EVI2 y cambio NDVI cuando ya está listo el paquete base.
+      # No recalcula mapas existentes ni invalida NDVI/NDMI si falla Copernicus.
+      - name: Solicitar SAVI EVI2 y cambio NDVI de esta parcela
+        if: ${{ success() && inputs.solo_validar != true }}
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          PARCELA_ID: ${{ inputs.parcela_id }}
+          SOLO_REVISAR: 'false'
+        run: python revisar_complementarios_programado.py
+
       # DELTA_AUTO_AVANZADOS_DESPUES_BASE
       # Una vez que se publican NDVI/NDMI, solicitar MSI/NDRE para la misma parcela.
       # Un fallo de Copernicus o GitHub no debe marcar los índices base como fallidos.
