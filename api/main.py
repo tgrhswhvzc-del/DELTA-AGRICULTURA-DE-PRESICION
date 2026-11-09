@@ -15,7 +15,9 @@ app = FastAPI(
 )
 
 # Módulo satelital
+from asesor_ia import router as asesor_ia_router
 app.include_router(satelite_router.router if hasattr(satelite_router, "router") else satelite_router)
+app.include_router(asesor_ia_router)
 
 
 # CORS - Comunicación con Shopify

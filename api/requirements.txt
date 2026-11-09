@@ -9,3 +9,4 @@ numpy
 tifffile
 Pillow
 rasterio
+openai>=2,<3
