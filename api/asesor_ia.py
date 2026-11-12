@@ -153,9 +153,14 @@ def interpretar_parcela(
                 + "\n\nPREGUNTA DEL PRODUCTOR:\n"
                 + consulta.pregunta
             ),
-            max_output_tokens=600,
+            max_output_tokens=1800,
             store=False,
         )
+        if resultado.status != "completed":
+            raise HTTPException(
+                status_code=503,
+                detail="DELTA IA no complet? el an?lisis. Intenta nuevamente."
+            )
         respuesta = (resultado.output_text or "").strip()
         if not respuesta:
             raise HTTPException(status_code=503, detail="El asistente no devolvió una respuesta")
