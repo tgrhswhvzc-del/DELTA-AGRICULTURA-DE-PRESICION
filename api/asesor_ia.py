@@ -84,6 +84,19 @@ con incertidumbre, nunca identifiques una enfermedad como confirmada solo por fo
 - Si hay signos graves (marchitez generalizada, pudrición, pérdida rápida), indica
 que conviene una revisión presencial pronto; no propongas tratamientos sin evidencia.
 
+DIAGNÓSTICO DE PARCELA CON EVIDENCIA ESPACIAL:
+- Cuando pidan diagnóstico de la parcela, explica primero qué señal cuantificada se encontró:
+  porcentaje de píxeles, contrastes entre sectores, variación temporal o coincidencia
+  de índices, usando SOLO los números presentes en analisis_espacial.
+- Si analisis_espacial no está disponible, dilo y utiliza los promedios como aproximación.
+- No digas que no puedes hacer NINGÚN diagnóstico: sí puedes describir vigor,
+  heterogeneidad y cambios espectrales; no puedes identificar una causa específica
+  sin contraste con suelo, fenología, clima e inspección.
+- Distingue porcentaje de píxeles observados de porcentaje total de hectáreas.
+- Prioriza hasta dos sectores para inspección y explica qué verificar allí.
+- No trates anomalías relativas como estrés hídrico confirmado; NDVI bajo puede
+  significar suelo desnudo o etapa temprana y NDRE/MSI requieren especial cautela.
+- Si piden diagnóstico, permite 100-160 palabras para responder con cifras útiles.
 LÍMITES AGRONÓMICOS:
 No inventes datos, diagnósticos, zonas específicas, fechas o referencias.
 NDVI mide señal de vegetación, NDMI relación con agua en follaje, NDRE clorofila
@@ -285,15 +298,18 @@ def interpretar_parcela(
         registro, mapas_base = _ultimo_paquete_v2(parcela_id)
         fecha_base = None
         indices = {}
+        metadatos_confirmados = {}
         if registro and mapas_base:
             fecha_base = str(registro["fecha_escena_referencia"])[:10]
             huella = firma_perimetro(parcela["perimetro"])
             indices = {nombre: _mapa(metadata) for nombre, metadata in mapas_base.items()}
+            metadatos_confirmados.update(mapas_base)
             for nombre in ("ndre", "msi", "savi", "evi2", "cambio_ndvi"):
                 # Solo aceptamos metadatos V2 de la escena y perímetro vigentes.
                 metadata = _metadatos_v2(parcela_id, nombre, fecha_base, huella)
                 if metadata:
                     indices[nombre] = _mapa(metadata)
+                    metadatos_confirmados[nombre] = metadata
 
         ambito, cultivos_mencionados = _determinar_ambito(
             consulta.pregunta, parcela.get("cultivo"),
@@ -333,6 +349,17 @@ def interpretar_parcela(
         else:
             contexto["ambito"] = "parcela"
         contexto["conversacion_reciente"] = _historial_seguro(consulta.historial)
+        # Solo analizamos GeoTIFFs si el usuario pregunta por su parcela o sus mapas.
+        if (ambito == "parcela" and fecha_base and metadatos_confirmados
+                and re.search(r"\b(diagnostico|analisis|indices|mapas|ndvi|ndmi|ndre|msi|savi|evi2|vigor|estres|estado|zonas|cultivo|parcela)\b",
+                              _normalizar_consulta(consulta.pregunta))):
+            try:
+                from diagnostico_espacial import analizar_mapas_espaciales
+                contexto["analisis_espacial"] = analizar_mapas_espaciales(
+                    parcela_id, fecha_base, metadatos_confirmados)
+            except Exception as error:
+                print("DELTA IA: análisis espacial no disponible:", type(error).__name__)
+                contexto["analisis_espacial"] = {"estado": "no_disponible"}
     except HTTPException:
         raise
     except Exception as error:
